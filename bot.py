@@ -4,14 +4,14 @@ import httpx
 from bs4 import BeautifulSoup
 from datetime import datetime
 from google import genai
+from telegram import Update, Bot
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from telegram import Update
 
 TELEGRAM_TOKEN = "8704316956:AAE1h8MnbwvL35GNeiLEUflTKCUIfhMIKgU"
 GEMINI_API_KEY = "AIzaSyCQx8bjxFhwCVD1qBGZW3J9MMhEXk7nSnU"
 CHANNEL_ID = "@PodrabotkaKiev_1"
 
-POST_INTERVAL = 3 * 60 * 60
+POST_INTERVAL = 3 * 60 * 60  # 3 часа
 MAX_VACANCIES = 3
 published_urls = set()
 
@@ -79,17 +79,14 @@ def format_vacancy(vacancy: dict) -> str:
 Посилання: {vacancy['link']}
 Використовуй емодзі 💼🔨💰, українська мова, до 100 слів, в кінці посилання."""
     try:
-        response = gemini_client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt
-        )
+        response = gemini_client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
         return response.text.strip()
     except Exception as e:
         logger.error(f"Gemini error: {e}")
         return f"💼 {vacancy['title']}\n💰 {vacancy['salary']}\n🔗 {vacancy['link']}"
 
 
-async def collect_and_post(context: ContextTypes.DEFAULT_TYPE):
+async def collect_and_post(bot: Bot):
     logger.info("🔍 Збираємо вакансії...")
     results = await asyncio.gather(parse_work_ua(), parse_olx_ua(), return_exceptions=True)
     all_vacancies = []
@@ -105,7 +102,7 @@ async def collect_and_post(context: ContextTypes.DEFAULT_TYPE):
             break
         try:
             post_text = format_vacancy(vacancy)
-            await context.bot.send_message(chat_id=CHANNEL_ID, text=post_text)
+            await bot.send_message(chat_id=CHANNEL_ID, text=post_text)
             published_urls.add(vacancy["link"])
             published += 1
             logger.info(f"✅ Опубліковано: {vacancy['title']}")
@@ -115,26 +112,43 @@ async def collect_and_post(context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"📢 Опубліковано {published} вакансій")
 
 
+async def auto_post_loop(bot: Bot):
+    """Бесконечный цикл публикации"""
+    while True:
+        await collect_and_post(bot)
+        logger.info(f"⏰ Следующая публикация через {POST_INTERVAL // 3600} часа")
+        await asyncio.sleep(POST_INTERVAL)
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔨 Привіт! Я @robota_pidrobitok_bot\n/post — опублікувати зараз\n/status — статус")
 
 async def manual_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔍 Шукаю...")
-    await collect_and_post(context)
+    await collect_and_post(context.bot)
     await update.message.reply_text("✅ Готово!")
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"📊 Канал: {CHANNEL_ID}\nЧас: {datetime.now().strftime('%H:%M %d.%m.%Y')}")
 
 
-def main():
+async def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    app.job_queue.run_repeating(collect_and_post, interval=POST_INTERVAL, first=30)
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("post", manual_post))
     app.add_handler(CommandHandler("status", status))
+
     logger.info("🚀 Бот запущено!")
-    app.run_polling()
+
+    async with app:
+        await app.start()
+        # Запускаем авто-постинг параллельно
+        asyncio.create_task(auto_post_loop(app.bot))
+        await app.updater.start_polling()
+        # Держим бота живым
+        await asyncio.Event().wait()
+
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
