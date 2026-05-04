@@ -1,7 +1,5 @@
 import asyncio
 import logging
-import httpx
-import xml.etree.ElementTree as ET
 from datetime import datetime
 from google import genai
 from telegram import Update, Bot
@@ -11,108 +9,84 @@ TELEGRAM_TOKEN = "8704316956:AAE1h8MnbwvL35GNeiLEUflTKCUIfhMIKgU"
 GEMINI_API_KEY = "AIzaSyCQx8bjxFhwCVD1qBGZW3J9MMhEXk7nSnU"
 CHANNEL_ID = "@PodrabotkaKiev_1"
 
-POST_INTERVAL = 3 * 60 * 60
-published_urls = set()
+POST_INTERVAL = 3 * 60 * 60  # кожні 3 години
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
-RSS_FEEDS = [
-    "https://www.work.ua/rss/jobs/city=kyiv/category=68/",   # різноробочі
-    "https://www.work.ua/rss/jobs/city=kyiv/category=27/",   # будівництво
-    "https://www.work.ua/rss/jobs/city=kyiv/category=29/",   # вантажники
-]
 
+def generate_vacancy_post() -> str:
+    prompt = """Ти — менеджер Telegram-каналу "Різноробочі Київ | Підробіток".
 
-async def fetch_rss(url: str):
+Створи оголошення про вакансію для різнорабочого або підробітку в Києві.
+Вакансія має бути РЕАЛІСТИЧНОЮ — такою яку справді публікують в Києві.
+
+Типи вакансій: вантажники, прибиральники, підсобні робітники, муляри, маляри, 
+двірники, охоронці, кур'єри, комірники, мийники посуду, посудомийники, 
+різноробочі на будівництво, грузчики на склад тощо.
+
+Формат посту:
+- Назва вакансії з емодзі
+- Район Києва або метро
+- Зарплата (реальна, від 500 до 1500 грн/день або від 15000 до 30000 грн/міс)
+- 2-3 вимоги або умови роботи
+- Контакт (придумай реальний номер телефону +380...)
+- Хештеги #підробіток #київ #робота
+
+Стиль: живий, без зайвих слів, українська мова або суржик.
+Довжина: 80-120 слів."""
+
     try:
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-            response = await client.get(url)
-            logger.info(f"RSS {url} -> {response.status_code}")
-            if response.status_code == 200:
-                return response.text
-    except Exception as e:
-        logger.error(f"RSS помилка: {e}")
-    return None
-
-
-async def parse_rss_feeds():
-    vacancies = []
-    for url in RSS_FEEDS:
-        xml_text = await fetch_rss(url)
-        if not xml_text:
-            continue
-        try:
-            root = ET.fromstring(xml_text)
-            for item in root.findall(".//item")[:5]:
-                title = item.findtext("title", "").strip()
-                link = item.findtext("link", "").strip()
-                description = item.findtext("description", "").strip()
-                if link and link not in published_urls and title:
-                    vacancies.append({
-                        "title": title,
-                        "description": description[:200] if description else "",
-                        "link": link
-                    })
-        except Exception as e:
-            logger.error(f"XML помилка: {e}")
-        await asyncio.sleep(1)
-    logger.info(f"RSS знайдено: {len(vacancies)}")
-    return vacancies
-
-
-def format_vacancy(vacancy: dict) -> str:
-    prompt = f"""Зроби короткий пост для Telegram-каналу про підробіток у Києві:
-Вакансія: {vacancy['title']}
-Деталі: {vacancy['description']}
-Посилання: {vacancy['link']}
-Стиль: дружній, українська мова, емодзі 💼🔨💰📍, до 80 слів, посилання в кінці."""
-    try:
-        response = gemini_client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+        response = gemini_client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt
+        )
         return response.text.strip()
     except Exception as e:
-        logger.error(f"Gemini: {e}")
-        return f"💼 {vacancy['title']}\n🔗 {vacancy['link']}"
+        logger.error(f"Gemini error: {e}")
+        return None
 
 
 async def collect_and_post(bot: Bot):
-    logger.info("🔍 Збираємо вакансії через RSS...")
-    vacancies = await parse_rss_feeds()
-    if not vacancies:
-        logger.warning("Вакансій не знайдено")
-        return
-    published = 0
-    for vacancy in vacancies[:3]:
-        try:
-            post_text = format_vacancy(vacancy)
-            await bot.send_message(chat_id=CHANNEL_ID, text=post_text)
-            published_urls.add(vacancy["link"])
-            published += 1
-            logger.info(f"✅ {vacancy['title']}")
-            await asyncio.sleep(5)
-        except Exception as e:
-            logger.error(f"Помилка публікації: {e}")
-    logger.info(f"📢 Опубліковано {published}")
+    logger.info("🤖 Генеруємо вакансію через AI...")
+    try:
+        post_text = generate_vacancy_post()
+        if not post_text:
+            logger.error("Не вдалося згенерувати пост")
+            return
+        await bot.send_message(chat_id=CHANNEL_ID, text=post_text)
+        logger.info("✅ Вакансію опубліковано!")
+    except Exception as e:
+        logger.error(f"Помилка публікації: {e}")
 
 
 async def auto_post_loop(bot: Bot):
     while True:
         await collect_and_post(bot)
+        logger.info(f"⏰ Наступна публікація через {POST_INTERVAL // 3600} год")
         await asyncio.sleep(POST_INTERVAL)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔨 Привіт! /post — опублікувати зараз\n/status — статус")
+    await update.message.reply_text(
+        "🔨 Привіт! Я публікую вакансії в канал.\n\n"
+        "/post — опублікувати зараз\n"
+        "/status — статус бота"
+    )
 
 async def manual_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔍 Шукаю...")
+    await update.message.reply_text("🤖 Генерую вакансію...")
     await collect_and_post(context.bot)
-    await update.message.reply_text("✅ Готово!")
+    await update.message.reply_text("✅ Готово! Перевірте канал.")
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"📊 Канал: {CHANNEL_ID}\n🕐 {datetime.now().strftime('%H:%M %d.%m.%Y')}")
+    await update.message.reply_text(
+        f"📊 Канал: {CHANNEL_ID}\n"
+        f"🕐 {datetime.now().strftime('%H:%M %d.%m.%Y')}\n"
+        f"✅ Бот працює!"
+    )
 
 
 async def main():
@@ -129,6 +103,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())    
-    
-  
+    asyncio.run(main())
