@@ -6,7 +6,7 @@ from telegram import Update, Bot
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 TELEGRAM_TOKEN = "8704316956:AAE1h8MnbwvL35GNeiLEUflTKCUIfhMIKgU"
-GEMINI_API_KEY = "AIzaSyCQx8bjxFhwCVD1qBGZW3J9MMhEXk7nSnU"
+GEMINI_API_KEY = "AIzaSyAMHUO2BXl6R7ZbJynJLRkbw1LEh3bEfa8"
 CHANNEL_ID = "@PodrabotkaKiev_1"
 
 POST_INTERVAL = 3 * 60 * 60  # кожні 3 години
