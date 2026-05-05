@@ -56,33 +56,34 @@ async def parse_work():
 
     soup = BeautifulSoup(html, "html.parser")
 
-    # 🔥 новый стабильный селектор Work.ua
-    cards = soup.select("div.card, article, a[href*='job']")
-
     jobs = []
 
-    for c in cards[:30]:
-        title = c.get_text(strip=True)
-        href = c.get("href")
+    # 🔥 ищем ВСЕ ссылки
+    for a in soup.find_all("a"):
+        text = a.get_text(strip=True)
+        href = a.get("href")
 
-        if not title or len(title) < 10:
+        if not text or not href:
             continue
 
-        if href and "/jobs/" in href:
-            link = "https://www.work.ua" + href
-        else:
-            link = url
+        # фильтр мусора
+        if len(text) < 10:
+            continue
+
+        if "/jobs/" not in href:
+            continue
+
+        link = "https://www.work.ua" + href
 
         if link in published_urls:
             continue
 
         jobs.append({
-            "title": title,
+            "title": text,
             "link": link
         })
 
-    return jobs
-
+    return jobs[:10]
 # ----------------- COMMANDS -----------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
