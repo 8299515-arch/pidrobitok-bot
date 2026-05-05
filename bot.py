@@ -112,8 +112,10 @@ async def post(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("✅ DONE")
 
+# 🔥 ВАЖНО — ОТЛАДКА
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print("📩 TEXT:", update.message.text)
+    await update.message.reply_text(f"Ты написал: {update.message.text}")
 
 # ----------------- MAIN -----------------
 
@@ -127,9 +129,12 @@ def main():
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("post", post))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    # 🔥 команды в приоритете
+    app.add_handler(CommandHandler("post", post), group=0)
+    app.add_handler(CommandHandler("start", start), group=0)
+
+    # 🔥 текст отдельно
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text), group=1)
 
     print("🚀 STARTING BOT...")
 
@@ -137,4 +142,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+  
    
