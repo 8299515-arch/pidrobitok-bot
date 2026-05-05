@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import os
 import random
@@ -57,7 +56,6 @@ async def parse_work():
         return []
 
     soup = BeautifulSoup(html, "html.parser")
-
     cards = soup.select("a[href*='/jobs/']")
 
     jobs = []
@@ -136,4 +134,7 @@ def main():
     print("🚀 STARTING BOT...")
 
     app.run_polling()
+
+if __name__ == "__main__":
+    main()
    
