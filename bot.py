@@ -11,14 +11,14 @@ from dotenv import load_dotenv
 import random
 import google.generativeai as genai
 
-load_dotenv()
+# ---------- LOAD ENV ----------
+load_dotenv(".evn")
 
-TELEGRAM_TOKEN = os.getenv(8237986787:AAEmWuDMr38QRp3UrsW-phre9F2O_e2khBs")
-CHANNEL_ID = os.getenv("@PodrabotkaKiev_1")
-GEMINI_API_KEY = os.getenv(AIzaSyCyhp-RKvbaFaZ41TYFPXrp_GPw-eipG3o)
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHANNEL_ID = os.getenv("CHANNEL_ID")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # ---------- CONFIG ----------
-
 POST_INTERVAL = 3 * 60 * 60
 MAX_VACANCIES = 3
 published_urls = set()
@@ -29,13 +29,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ---------- AI INIT ----------
-
+# ---------- GEMINI ----------
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
-# ---------- HEADERS ----------
-
+# ---------- USER AGENTS ----------
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
@@ -48,36 +46,42 @@ def get_headers():
     }
 
 # ---------- FETCH ----------
-
 async def fetch_html(url: str):
     try:
         async with httpx.AsyncClient(timeout=20, headers=get_headers()) as client:
-            await asyncio.sleep(random.uniform(1, 3))
-            response = await client.get(url)
-            if response.status_code == 200:
-                return response.text
+            await asyncio.sleep(random.uniform(1, 2))
+            r = await client.get(url)
+            if r.status_code == 200:
+                return r.text
     except Exception as e:
         logger.error(f"Fetch error: {e}")
     return None
 
 # ---------- PARSER ----------
-
 async def parse_work_ua():
-    vacancies = []
     url = "https://www.work.ua/jobs-kyiv-різноробочий/"
     html = await fetch_html(url)
 
     if not html:
-        return vacancies
+        return []
 
     soup = BeautifulSoup(html, "html.parser")
     cards = soup.select(".job-link")
 
+    vacancies = []
+
     for card in cards[:10]:
         try:
-            title = card.select_one("h2").text.strip()
-            salary = card.select_one(".salary").text.strip() if card.select_one(".salary") else "Договірна"
+            title_el = card.select_one("h2")
+            title = title_el.text.strip() if title_el else "Без назви"
+
+            salary_el = card.select_one(".salary")
+            salary = salary_el.text.strip() if salary_el else "Договірна"
+
             href = card.get("href")
+            if not href:
+                continue
+
             link = f"https://www.work.ua{href}"
 
             if link not in published_urls:
@@ -87,25 +91,24 @@ async def parse_work_ua():
                     "link": link
                 })
         except:
-            pass
+            continue
 
     return vacancies
 
 # ---------- AI FORMAT ----------
-
 def ai_format_vacancy(v):
     if not GEMINI_API_KEY:
         return f"💼 {v['title']}\n💰 {v['salary']}\n🔗 {v['link']}"
 
     try:
-        model = genai.GenerativeModel("gemini-pro")
+        model = genai.GenerativeModel("gemini-1.5-flash")
 
         prompt = f"""
-Сделай короткий пост для Telegram (до 80 слов):
+Сделай короткий Telegram пост (до 80 слов).
 Вакансия: {v['title']}
 Зарплата: {v['salary']}
 Добавь эмодзи 💼💰🔨
-В конце ссылка: {v['link']}
+Ссылка: {v['link']}
 Пиши на украинском.
 """
 
@@ -117,61 +120,64 @@ def ai_format_vacancy(v):
         return f"💼 {v['title']}\n💰 {v['salary']}\n🔗 {v['link']}"
 
 # ---------- POST ----------
-
 async def collect_and_post(bot):
     vacancies = await parse_work_ua()
 
     if not vacancies:
-        logger.warning("❌ Нет вакансий")
+        logger.warning("❌ No vacancies found")
         return
 
     count = 0
+
     for v in vacancies:
         if count >= MAX_VACANCIES:
             break
+
         try:
             text = ai_format_vacancy(v)
             await bot.send_message(chat_id=CHANNEL_ID, text=text)
+
             published_urls.add(v["link"])
             count += 1
-            logger.info(f"✅ Опубликовано: {v['title']}")
-            await asyncio.sleep(3)
+
+            logger.info(f"Posted: {v['title']}")
+
+            await asyncio.sleep(2)
+
         except TelegramError as e:
             logger.error(f"Telegram error: {e}")
 
 # ---------- SCHEDULER ----------
-
 async def scheduler(bot):
-    await asyncio.sleep(10)
+    await asyncio.sleep(5)
+
     while True:
         await collect_and_post(bot)
-        logger.info("⏰ Ждём следующий цикл...")
+        logger.info("Waiting next cycle...")
         await asyncio.sleep(POST_INTERVAL)
 
 # ---------- COMMANDS ----------
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔨 Бот работает!\n/post — опубликовать сейчас")
+    await update.message.reply_text("🤖 Бот активний!")
 
 async def post(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔍 Ищу вакансии...")
+    await update.message.reply_text("🔍 Шукаю вакансії...")
     await collect_and_post(context.bot)
     await update.message.reply_text("✅ Готово")
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        f"📊 Опубликовано: {len(published_urls)}\n"
+        f"📊 Опубліковано: {len(published_urls)}\n"
         f"⏰ {datetime.now().strftime('%H:%M %d.%m.%Y')}"
     )
 
 # ---------- MAIN ----------
-
 def main():
     if not TELEGRAM_TOKEN:
-        raise ValueError("❌ Нет TELEGRAM_TOKEN")
+        raise ValueError("No TELEGRAM_TOKEN in .env")
 
     if not CHANNEL_ID:
-        raise ValueError("❌ Нет CHANNEL_ID")
+        raise ValueError("No CHANNEL_ID in .env")
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
@@ -180,7 +186,7 @@ def main():
     app.add_handler(CommandHandler("status", status))
 
     async def on_start(app):
-        logger.info("🚀 Бот запущен")
+        logger.info("Bot started")
         asyncio.create_task(scheduler(app.bot))
 
     app.post_init = on_start
@@ -189,3 +195,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+   
