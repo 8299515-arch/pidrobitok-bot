@@ -6,13 +6,14 @@ import httpx
 from bs4 import BeautifulSoup
 from datetime import datetime
 from dotenv import load_dotenv
-import google.generativeai as genai
 
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from telegram.error import TelegramError
 
-# ---------- LOAD ENV ----------
+from google import genai
+
+# ---------- ENV ----------
 load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -27,9 +28,8 @@ published_urls = set()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ---------- GEMINI ----------
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+# ---------- AI ----------
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ---------- HEADERS ----------
 USER_AGENTS = [
@@ -43,8 +43,8 @@ def get_headers():
 # ---------- FETCH ----------
 async def fetch_html(url):
     try:
-        async with httpx.AsyncClient(timeout=20, headers=get_headers()) as client:
-            r = await client.get(url)
+        async with httpx.AsyncClient(timeout=20, headers=get_headers()) as client_http:
+            r = await client_http.get(url)
             return r.text if r.status_code == 200 else None
     except Exception as e:
         logger.error(e)
@@ -54,13 +54,14 @@ async def fetch_html(url):
 async def parse_work():
     url = "https://www.work.ua/jobs-kyiv-різноробочий/"
     html = await fetch_html(url)
+
     if not html:
         return []
 
     soup = BeautifulSoup(html, "html.parser")
     cards = soup.select(".job-link")
 
-    results = []
+    jobs = []
 
     for c in cards[:10]:
         try:
@@ -70,10 +71,14 @@ async def parse_work():
             salary_el = c.select_one(".salary")
             salary = salary_el.text.strip() if salary_el else "Договірна"
 
-            link = "https://www.work.ua" + c.get("href")
+            href = c.get("href")
+            if not href:
+                continue
+
+            link = "https://www.work.ua" + href
 
             if link not in published_urls:
-                results.append({
+                jobs.append({
                     "title": title,
                     "salary": salary,
                     "link": link
@@ -81,40 +86,84 @@ async def parse_work():
         except:
             continue
 
-    return results
+    return jobs
 
-# ---------- AI ----------
-def format_vacancy(v):
-    if not GEMINI_API_KEY:
-        return f"💼 {v['title']}\n💰 {v['salary']}\n🔗 {v['link']}"
-
+# ---------- AI SCORE ----------
+def ai_score(job):
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
-
         prompt = f"""
-Короткий пост Telegram (до 80 слов)
-Вакансия: {v['title']}
-Зарплата: {v['salary']}
-Ссылка: {v['link']}
-Украинский язык, эмодзи 💼💰🔨
+Оцени вакансию от 0 до 10.
+
+Критерии:
+- зарплата
+- адекватность
+- полезность
+- не скам
+
+Вакансия:
+{job['title']}
+{job['salary']}
+{job['link']}
+
+Ответ:
+score: X
 """
 
-        res = model.generate_content(prompt)
-        return res.text.strip()
+        res = client.models.generate_content(
+            model="gemini-1.5-flash",
+            contents=prompt
+        )
+
+        text = res.text.lower()
+
+        score = 0
+        for line in text.split("\n"):
+            if "score" in line:
+                try:
+                    score = int(''.join(filter(str.isdigit, line)))
+                except:
+                    score = 0
+
+        return score
 
     except:
-        return f"💼 {v['title']}\n💰 {v['salary']}\n🔗 {v['link']}"
+        return 0
 
 # ---------- POST ----------
-async def post_vacancies(bot):
+async def collect_and_post(bot):
     jobs = await parse_work()
 
-    for i, v in enumerate(jobs[:MAX_VACANCIES]):
+    if not jobs:
+        logger.warning("No jobs found")
+        return
+
+    # AI scoring
+    for j in jobs:
+        j["score"] = ai_score(j)
+
+    # sort best first
+    jobs.sort(key=lambda x: x["score"], reverse=True)
+
+    count = 0
+
+    for j in jobs:
+        if count >= MAX_VACANCIES:
+            break
+
         try:
-            text = format_vacancy(v)
+            text = f"""
+🔥 {j['title']}
+💰 {j['salary']}
+⭐ AI рейтинг: {j['score']}/10
+
+🔗 {j['link']}
+"""
+
             await bot.send_message(chat_id=CHANNEL_ID, text=text)
 
-            published_urls.add(v["link"])
+            published_urls.add(j["link"])
+            count += 1
+
             await asyncio.sleep(2)
 
         except TelegramError as e:
@@ -122,30 +171,31 @@ async def post_vacancies(bot):
 
 # ---------- COMMANDS ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤖 Бот працює!")
+    await update.message.reply_text("🤖 AI бот вакансий работает")
 
 async def post(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔍 Шукаю...")
-    await post_vacancies(context.bot)
+    await update.message.reply_text("🔍 Ищу лучшие вакансии...")
+    await collect_and_post(context.bot)
     await update.message.reply_text("✅ Готово")
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        f"📊 Опубліковано: {len(published_urls)}\n"
+        f"📊 Постов: {len(published_urls)}\n"
         f"⏰ {datetime.now()}"
     )
 
 # ---------- SCHEDULER ----------
 async def scheduler(app):
     await asyncio.sleep(5)
+
     while True:
-        await post_vacancies(app.bot)
+        await collect_and_post(app.bot)
         await asyncio.sleep(POST_INTERVAL)
 
 # ---------- MAIN ----------
 def main():
     if not TELEGRAM_TOKEN:
-        raise ValueError("NO TOKEN")
+        raise ValueError("NO TELEGRAM_TOKEN")
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
@@ -162,4 +212,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
    
