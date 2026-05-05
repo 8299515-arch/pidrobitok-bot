@@ -58,7 +58,7 @@ async def fetch_html(url: str):
 
 async def parse_work_ua():
     vacancies = []
-    url = "https://www.work.ua/jobs-kyiv-різноробочий/"
+    url = "https://www.work.ua/jobs-kyiv-%D1%80%D1%96%D0%B7%D0%BD%D0%BE%D1%80%D0%BE%D0%B1%D0%BE%D1%87%D0%B8%D0%B9/"
     html = await fetch_html(url)
     if not html:
         return vacancies
@@ -130,17 +130,15 @@ def main():
     app.add_handler(CommandHandler("post", post))
     app.add_handler(CommandHandler("status", status))
 
-    async def run():
-        await app.initialize()
-        await app.start()
-
-        logger.info("Бот запущен")
-
+    async def on_start(app):
         asyncio.create_task(scheduler(app.bot))
 
-        await app.run_polling()
+    app.post_init = on_start
 
-    asyncio.run(run())
+    logger.info("🚀 Бот запускается...")
+
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
+
