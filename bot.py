@@ -129,18 +129,17 @@ def main():
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-    # 🔥 команды в приоритете
     app.add_handler(CommandHandler("post", post), group=0)
     app.add_handler(CommandHandler("start", start), group=0)
 
-    # 🔥 текст отдельно
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text), group=1)
 
     print("🚀 STARTING BOT...")
 
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
-  
+    while True:
+        try:
+            app.run_polling()
+        except Exception as e:
+            print("❌ ERROR:", e)
+            print("🔄 RESTARTING BOT...")
    
