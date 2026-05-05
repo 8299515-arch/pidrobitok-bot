@@ -7,9 +7,14 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 from dotenv import load_dotenv
 
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from telegram.error import TelegramError
+from telegram import Update, ReplyKeyboardMarkup
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
 
 from google import genai
 
@@ -31,6 +36,12 @@ logger = logging.getLogger(__name__)
 # ---------- AI ----------
 client = genai.Client(api_key=GEMINI_API_KEY)
 
+# ---------- KEYBOARD ----------
+keyboard = ReplyKeyboardMarkup(
+    [["🔍 Вакансии"], ["📊 Статус"]],
+    resize_keyboard=True
+)
+
 # ---------- HEADERS ----------
 USER_AGENTS = [
     "Mozilla/5.0 Chrome/124.0",
@@ -38,19 +49,23 @@ USER_AGENTS = [
 ]
 
 def get_headers():
-    return {"User-Agent": random.choice(USER_AGENTS)}
+    return {
+        "User-Agent": random.choice(USER_AGENTS),
+        "Accept-Language": "uk-UA,ru;q=0.9,en;q=0.8",
+    }
 
 # ---------- FETCH ----------
 async def fetch_html(url):
     try:
         async with httpx.AsyncClient(timeout=20, headers=get_headers()) as client_http:
+            await asyncio.sleep(random.uniform(1.5, 3))
             r = await client_http.get(url)
             return r.text if r.status_code == 200 else None
     except Exception as e:
-        logger.error(e)
+        logger.error(f"Fetch error: {e}")
         return None
 
-# ---------- PARSER ----------
+# ---------- WORK.UA PARSER ----------
 async def parse_work():
     url = "https://www.work.ua/jobs-kyiv-різноробочий/"
     html = await fetch_html(url)
@@ -59,23 +74,28 @@ async def parse_work():
         return []
 
     soup = BeautifulSoup(html, "html.parser")
-    cards = soup.select(".job-link")
+
+    # устойчивый селектор
+    cards = soup.select("div.card")
 
     jobs = []
 
-    for c in cards[:10]:
+    for card in cards[:15]:
         try:
-            title_el = c.select_one("h2")
-            title = title_el.text.strip() if title_el else "Без назви"
-
-            salary_el = c.select_one(".salary")
-            salary = salary_el.text.strip() if salary_el else "Договірна"
-
-            href = c.get("href")
-            if not href:
+            title_tag = card.select_one("h2, h3")
+            if not title_tag:
                 continue
 
-            link = "https://www.work.ua" + href
+            title = title_tag.get_text(strip=True)
+
+            a_tag = card.select_one("a")
+            if not a_tag or not a_tag.get("href"):
+                continue
+
+            link = "https://www.work.ua" + a_tag["href"]
+
+            salary_tag = card.select_one(".salary, .text-nowrap")
+            salary = salary_tag.get_text(strip=True) if salary_tag else "Договірна"
 
             if link not in published_urls:
                 jobs.append({
@@ -83,8 +103,9 @@ async def parse_work():
                     "salary": salary,
                     "link": link
                 })
-        except:
-            continue
+
+        except Exception as e:
+            logger.error(f"Parse error: {e}")
 
     return jobs
 
@@ -93,17 +114,13 @@ def ai_score(job):
     try:
         prompt = f"""
 Оцени вакансию от 0 до 10.
-
-Критерии:
-- зарплата
+Учитывай:
+- зарплату
 - адекватность
-- полезность
-- не скам
+- пользу
 
-Вакансия:
 {job['title']}
 {job['salary']}
-{job['link']}
 
 Ответ:
 score: X
@@ -116,33 +133,38 @@ score: X
 
         text = res.text.lower()
 
-        score = 0
         for line in text.split("\n"):
             if "score" in line:
                 try:
-                    score = int(''.join(filter(str.isdigit, line)))
+                    return int(''.join(filter(str.isdigit, line)))
                 except:
-                    score = 0
+                    return 0
 
-        return score
-
-    except:
         return 0
 
-# ---------- POST ----------
-async def collect_and_post(bot):
+    except Exception as e:
+        logger.error(f"AI error: {e}")
+        return 0
+
+# ---------- CORE LOGIC ----------
+async def collect_jobs():
     jobs = await parse_work()
+
+    for j in jobs:
+        j["score"] = ai_score(j)
+
+    jobs.sort(key=lambda x: x["score"], reverse=True)
+    return jobs
+
+# ---------- POST ----------
+async def collect_and_post(context: ContextTypes.DEFAULT_TYPE):
+    bot = context.bot
+
+    jobs = await collect_jobs()
 
     if not jobs:
         logger.warning("No jobs found")
         return
-
-    # AI scoring
-    for j in jobs:
-        j["score"] = ai_score(j)
-
-    # sort best first
-    jobs.sort(key=lambda x: x["score"], reverse=True)
 
     count = 0
 
@@ -150,47 +172,44 @@ async def collect_and_post(bot):
         if count >= MAX_VACANCIES:
             break
 
-        try:
-            text = f"""
+        text = f"""
 🔥 {j['title']}
 💰 {j['salary']}
-⭐ AI рейтинг: {j['score']}/10
+⭐ AI: {j['score']}/10
 
 🔗 {j['link']}
 """
 
+        try:
             await bot.send_message(chat_id=CHANNEL_ID, text=text)
-
             published_urls.add(j["link"])
             count += 1
-
-            await asyncio.sleep(2)
-
-        except TelegramError as e:
-            logger.error(e)
+        except Exception as e:
+            logger.error(f"Send error: {e}")
 
 # ---------- COMMANDS ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤖 AI бот вакансий работает")
-
-async def post(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔍 Ищу лучшие вакансии...")
-    await collect_and_post(context.bot)
-    await update.message.reply_text("✅ Готово")
+    await update.message.reply_text(
+        "🤖 Бот вакансий активен",
+        reply_markup=keyboard
+    )
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        f"📊 Постов: {len(published_urls)}\n"
-        f"⏰ {datetime.now()}"
+        f"📊 Вакансий отправлено: {len(published_urls)}\n⏰ {datetime.now()}"
     )
 
-# ---------- SCHEDULER ----------
-async def scheduler(app):
-    await asyncio.sleep(5)
+# ---------- BUTTONS ----------
+async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
 
-    while True:
-        await collect_and_post(app.bot)
-        await asyncio.sleep(POST_INTERVAL)
+    if text == "🔍 Вакансии":
+        await update.message.reply_text("🔍 Ищу лучшие вакансии...")
+        await collect_and_post(context)
+        await update.message.reply_text("✅ Готово")
+
+    elif text == "📊 Статус":
+        await status(update, context)
 
 # ---------- MAIN ----------
 def main():
@@ -199,18 +218,22 @@ def main():
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
+    # защита от конфликтов
+    app.bot.delete_webhook(drop_pending_updates=True)
+
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("post", post))
     app.add_handler(CommandHandler("status", status))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_buttons))
 
-    async def on_start(app):
-        asyncio.create_task(scheduler(app))
+    # стабильный автопостинг
+    app.job_queue.run_repeating(
+        collect_and_post,
+        interval=POST_INTERVAL,
+        first=10
+    )
 
-    app.post_init = on_start
-
+    logger.info("🚀 BOT STARTED")
     app.run_polling()
 
 if __name__ == "__main__":
     main()
-
-   
