@@ -12,7 +12,7 @@ import random
 import google.generativeai as genai
 
 # ---------- LOAD ENV ----------
-load_dotenv(".evn")
+load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
