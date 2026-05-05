@@ -4,11 +4,12 @@ import httpx
 from bs4 import BeautifulSoup
 from datetime import datetime
 from google import genai
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, Application
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from telegram import Update
 from telegram.error import TelegramError
 import os
 from dotenv import load_dotenv
+import random
 
 load_dotenv()
 
@@ -25,25 +26,62 @@ logger = logging.getLogger(__name__)
 
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+]
 
-async def fetch_html(url: str):
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+
+def get_headers(referer: str = "https://www.google.com/"):
+    return {
+        "User-Agent": random.choice(USER_AGENTS),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "uk-UA,uk;q=0.9,ru;q=0.8,en-US;q=0.7,en;q=0.6",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Referer": referer,
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "cross-site",
+        "Cache-Control": "max-age=0",
+    }
+
+
+async def fetch_html(url: str, referer: str = "https://www.google.com/"):
     try:
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-            response = await client.get(url, headers=headers)
-            return response.text
+        async with httpx.AsyncClient(
+            timeout=20,
+            follow_redirects=True,
+            headers=get_headers(referer),
+        ) as client:
+            # Невелика затримка щоб не виглядати як бот
+            await asyncio.sleep(random.uniform(1, 3))
+            response = await client.get(url)
+            logger.info(f"GET {url} -> {response.status_code}")
+            if response.status_code == 200:
+                return response.text
+            else:
+                logger.warning(f"Статус {response.status_code} для {url}")
+                return None
     except Exception as e:
-        logger.error(f"Ошибка загрузки {url}: {e}")
+        logger.error(f"Помилка завантаження {url}: {e}")
         return None
 
 
 async def parse_work_ua():
     vacancies = []
-    html = await fetch_html("https://www.work.ua/jobs-%D1%80%D1%96%D0%B7%D0%BD%D0%BE%D1%80%D0%B0%D0%B1%D0%BE%D1%87%D0%B8%D0%B9/")
+    url = "https://www.work.ua/jobs-kyiv-%D1%80%D1%96%D0%B7%D0%BD%D0%BE%D1%80%D0%B0%D0%B1%D0%BE%D1%87%D0%B8%D0%B9/"
+    html = await fetch_html(url, referer="https://www.work.ua/")
     if not html:
         return vacancies
     soup = BeautifulSoup(html, "html.parser")
-    for card in soup.select(".job-link")[:10]:
+    cards = soup.select(".job-link")
+    logger.info(f"work.ua: знайдено {len(cards)} карток")
+    for card in cards[:10]:
         try:
             title = card.select_one("h2").text.strip() if card.select_one("h2") else "Без назви"
             company = card.select_one(".add-bottom").text.strip() if card.select_one(".add-bottom") else "Не вказано"
@@ -54,16 +92,20 @@ async def parse_work_ua():
                 vacancies.append({"title": title, "company": company, "salary": salary, "link": link})
         except Exception:
             pass
+    logger.info(f"work.ua: {len(vacancies)} нових вакансій")
     return vacancies
 
 
 async def parse_olx_ua():
     vacancies = []
-    html = await fetch_html("https://www.olx.ua/uk/rabota/raznorabochie/")
+    url = "https://www.olx.ua/uk/rabota/stroitelstvo/raznorabochiy/kiev/"
+    html = await fetch_html(url, referer="https://www.olx.ua/")
     if not html:
         return vacancies
     soup = BeautifulSoup(html, "html.parser")
-    for card in soup.select("[data-cy='l-card']")[:10]:
+    cards = soup.select("[data-cy='l-card']")
+    logger.info(f"olx.ua: знайдено {len(cards)} карток")
+    for card in cards[:10]:
         try:
             title = card.select_one("h6").text.strip() if card.select_one("h6") else "Без назви"
             salary = card.select_one("[data-testid='ad-price']").text.strip() if card.select_one("[data-testid='ad-price']") else "Договірна"
@@ -74,6 +116,32 @@ async def parse_olx_ua():
                 vacancies.append({"title": title, "company": "OLX", "salary": salary, "link": link})
         except Exception:
             pass
+    logger.info(f"olx.ua: {len(vacancies)} нових вакансій")
+    return vacancies
+
+
+async def parse_robota_ua():
+    """Додаткове джерело - robota.ua"""
+    vacancies = []
+    url = "https://robota.ua/zapros/%D1%80%D1%96%D0%B7%D0%BD%D0%BE%D1%80%D0%BE%D0%B1%D0%BE%D1%87%D0%B8%D0%B9/kyiv"
+    html = await fetch_html(url, referer="https://robota.ua/")
+    if not html:
+        return vacancies
+    soup = BeautifulSoup(html, "html.parser")
+    cards = soup.select("alliance-employer-vacancy-short-card")
+    logger.info(f"robota.ua: знайдено {len(cards)} карток")
+    for card in cards[:10]:
+        try:
+            title = card.select_one("h2").text.strip() if card.select_one("h2") else "Без назви"
+            salary = card.select_one(".salary").text.strip() if card.select_one(".salary") else "Договірна"
+            link_el = card.select_one("a")
+            href = link_el.get("href", "") if link_el else ""
+            link = f"https://robota.ua{href}" if href.startswith("/") else href
+            if link and link not in published_urls:
+                vacancies.append({"title": title, "company": "Robota.ua", "salary": salary, "link": link})
+        except Exception:
+            pass
+    logger.info(f"robota.ua: {len(vacancies)} нових вакансій")
     return vacancies
 
 
@@ -100,14 +168,23 @@ async def format_vacancy(vacancy: dict) -> str:
 
 async def collect_and_post_direct(bot):
     logger.info("🔍 Збираємо вакансії...")
-    results = await asyncio.gather(parse_work_ua(), parse_olx_ua(), return_exceptions=True)
+    results = await asyncio.gather(
+        parse_work_ua(),
+        parse_olx_ua(),
+        parse_robota_ua(),
+        return_exceptions=True
+    )
     all_vacancies = []
     for result in results:
         if isinstance(result, list):
             all_vacancies.extend(result)
+
+    logger.info(f"Всього знайдено: {len(all_vacancies)} вакансій")
+
     if not all_vacancies:
-        logger.warning("Вакансій не знайдено")
+        logger.warning("⚠️ Вакансій не знайдено — всі сайти заблоковані або змінили структуру")
         return
+
     published = 0
     for vacancy in all_vacancies:
         if published >= MAX_VACANCIES:
@@ -182,9 +259,6 @@ def main():
 
     logger.info("🚀 Бот запущено!")
 
-    # Запускаємо scheduler через run_until_complete після старту polling
-    loop = asyncio.get_event_loop()
-
     async def run():
         async with app:
             await app.start()
@@ -192,7 +266,7 @@ def main():
             logger.info("✅ Application running, starting scheduler...")
             await scheduler(app.bot)
 
-    loop.run_until_complete(run())
+    asyncio.run(run())
 
 
 if __name__ == "__main__":
