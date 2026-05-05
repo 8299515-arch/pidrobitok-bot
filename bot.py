@@ -67,7 +67,7 @@ async def fetch_html(url):
 
 # ---------- WORK.UA PARSER ----------
 async def parse_work():
-    url = "https://www.work.ua/jobs-kyiv-різноробочий/"
+    url = "https://www.work.ua/jobs-kyiv-%D1%80%D1%96%D0%B7%D0%BD%D0%BE%D1%80%D0%BE%D0%B1%D0%BE%D1%87%D0%B8%D0%B9/"
     html = await fetch_html(url)
 
     if not html:
@@ -75,87 +75,37 @@ async def parse_work():
 
     soup = BeautifulSoup(html, "html.parser")
 
-    # устойчивый селектор
-    cards = soup.select("div.card")
+    # 🔥 новый более живой селектор
+    cards = soup.select("a[href*='/jobs/']")
 
     jobs = []
 
-    for card in cards[:15]:
+    for c in cards[:20]:
         try:
-            title_tag = card.select_one("h2, h3")
-            if not title_tag:
+            title = c.get_text(strip=True)
+
+            href = c.get("href")
+            if not href or "/jobs/" not in href:
                 continue
 
-            title = title_tag.get_text(strip=True)
+            link = "https://www.work.ua" + href
 
-            a_tag = card.select_one("a")
-            if not a_tag or not a_tag.get("href"):
+            if link in published_urls:
                 continue
 
-            link = "https://www.work.ua" + a_tag["href"]
+            jobs.append({
+                "title": title,
+                "salary": "—",
+                "link": link
+            })
 
-            salary_tag = card.select_one(".salary, .text-nowrap")
-            salary = salary_tag.get_text(strip=True) if salary_tag else "Договірна"
-
-            if link not in published_urls:
-                jobs.append({
-                    "title": title,
-                    "salary": salary,
-                    "link": link
-                })
-
-        except Exception as e:
-            logger.error(f"Parse error: {e}")
+        except:
+            continue
 
     return jobs
-
-# ---------- AI SCORE ----------
-def ai_score(job):
-    try:
-        prompt = f"""
-Оцени вакансию от 0 до 10.
-Учитывай:
-- зарплату
-- адекватность
-- пользу
-
-{job['title']}
-{job['salary']}
-
-Ответ:
-score: X
-"""
-
-        res = client.models.generate_content(
-            model="gemini-1.5-flash",
-            contents=prompt
         )
 
-        text = res.text.lower()
-
-        for line in text.split("\n"):
-            if "score" in line:
-                try:
-                    return int(''.join(filter(str.isdigit, line)))
-                except:
-                    return 0
-
-        return 0
-
-    except Exception as e:
-        logger.error(f"AI error: {e}")
-        return 0
-
-# ---------- CORE LOGIC ----------
-async def collect_jobs():
-    jobs = await parse_work()
-
-    for j in jobs:
-        j["score"] = ai_score(j)
-
-    jobs.sort(key=lambda x: x["score"], reverse=True)
-    return jobs
-
+    
 # ---------- POST ----------
 async def collect_and_post(context: ContextTypes.DEFAULT_TYPE):
     bot = context.bot
