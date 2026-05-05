@@ -1,197 +1,191 @@
 import asyncio
 import logging
+import httpx
+from bs4 import BeautifulSoup
 from datetime import datetime
-from google import genai
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from telegram import Update
 from telegram.error import TelegramError
 import os
 from dotenv import load_dotenv
-import httpx
-import re
+import random
+import google.generativeai as genai
 
 load_dotenv()
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8237986787:AAEmWuDMr38QRp3UrsW-phre9F2O_e2khBs")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyC3ebLl8PfdhH4Ey5WTMXAqNaTEtHXFdI4")
-CHANNEL_ID = os.getenv("CHANNEL_ID", "@PodrabotkaKiev_1")
+TELEGRAM_TOKEN = os.getenv(8237986787:AAEmWuDMr38QRp3UrsW-phre9F2O_e2khBs")
+CHANNEL_ID = os.getenv("@PodrabotkaKiev_1")
+GEMINI_API_KEY = os.getenv(AIzaSyCyhp-RKvbaFaZ41TYFPXrp_GPw-eipG3o)
 
-if not TELEGRAM_TOKEN:
-    raise ValueError("Нет TELEGRAM_TOKEN")
-if not GEMINI_API_KEY:
-    raise ValueError("Нет GEMINI_API_KEY")
-if not CHANNEL_ID:
-    raise ValueError("Нет CHANNEL_ID")
+# ---------- CONFIG ----------
 
-POST_INTERVAL = 3 * 60 * 60  # 3 часа
-published_ids = set()
+POST_INTERVAL = 3 * 60 * 60
+MAX_VACANCIES = 3
+published_urls = set()
 
-logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
-gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+# ---------- AI INIT ----------
 
-SOURCE_CHANNELS = [
-    "kyivjob",
-    "rabota_kiev_ua",
-    "pidrobitok_kyiv",
-    "workkiev",
-    "vakansii_kiev",
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+
+# ---------- HEADERS ----------
+
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
 ]
 
-KEYWORDS = [
-    "різноробочий", "разнорабочий", "вантажник", "грузчик",
-    "підсобний", "підробіток", "подработка", "підробіт",
-    "будівництво", "склад", "прибирання", "розвантаження",
-    "навантаження", "кур'єр", "промоутер", "охоронник",
-]
+def get_headers():
+    return {
+        "User-Agent": random.choice(USER_AGENTS),
+        "Accept-Language": "uk-UA,ru;q=0.8,en-US;q=0.6",
+    }
 
+# ---------- FETCH ----------
 
-async def fetch_channel_messages(channel_username: str) -> list:
-    messages = []
-    url = f"https://t.me/s/{channel_username}"
+async def fetch_html(url: str):
     try:
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Accept-Language": "uk-UA,uk;q=0.9",
-            }
-            response = await client.get(url, headers=headers)
-            logger.info(f"t.me/s/{channel_username} -> {response.status_code}")
-            if response.status_code != 200:
-                return messages
+        async with httpx.AsyncClient(timeout=20, headers=get_headers()) as client:
+            await asyncio.sleep(random.uniform(1, 3))
+            response = await client.get(url)
+            if response.status_code == 200:
+                return response.text
+    except Exception as e:
+        logger.error(f"Fetch error: {e}")
+    return None
 
-            html = response.text
-            msg_pattern = re.findall(
-                r'data-post="[^/]+/(\d+)"[^>]*>.*?<div class="tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>',
-                html, re.DOTALL
-            )
-            for msg_id, msg_html in msg_pattern:
-                text = re.sub(r'<[^>]+>', ' ', msg_html)
-                text = re.sub(r'\s+', ' ', text).strip()
-                text = text.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
-                if len(text) < 20:
-                    continue
-                unique_id = f"{channel_username}_{msg_id}"
-                if unique_id in published_ids:
-                    continue
-                messages.append({
-                    "id": unique_id,
-                    "text": text,
-                    "link": f"https://t.me/{channel_username}/{msg_id}",
-                    "channel": channel_username,
+# ---------- PARSER ----------
+
+async def parse_work_ua():
+    vacancies = []
+    url = "https://www.work.ua/jobs-kyiv-різноробочий/"
+    html = await fetch_html(url)
+
+    if not html:
+        return vacancies
+
+    soup = BeautifulSoup(html, "html.parser")
+    cards = soup.select(".job-link")
+
+    for card in cards[:10]:
+        try:
+            title = card.select_one("h2").text.strip()
+            salary = card.select_one(".salary").text.strip() if card.select_one(".salary") else "Договірна"
+            href = card.get("href")
+            link = f"https://www.work.ua{href}"
+
+            if link not in published_urls:
+                vacancies.append({
+                    "title": title,
+                    "salary": salary,
+                    "link": link
                 })
-    except Exception as e:
-        logger.error(f"Помилка отримання {channel_username}: {e}")
-    return messages
+        except:
+            pass
 
+    return vacancies
 
-def is_vacancy(text: str) -> bool:
-    text_lower = text.lower()
-    return any(kw in text_lower for kw in KEYWORDS)
+# ---------- AI FORMAT ----------
 
+def ai_format_vacancy(v):
+    if not GEMINI_API_KEY:
+        return f"💼 {v['title']}\n💰 {v['salary']}\n🔗 {v['link']}"
 
-def _format_vacancy_sync(text: str, link: str) -> str:
-    prompt = f"""Перепиши це оголошення про роботу як короткий пост для Telegram-каналу підробітків у Києві.
-Оригінал: {text[:500]}
-Посилання на оригінал: {link}
-Вимоги: українська мова, емодзі 💼🔨💰, до 100 слів, в кінці посилання."""
     try:
-        response = gemini_client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt
-        )
+        model = genai.GenerativeModel("gemini-pro")
+
+        prompt = f"""
+Сделай короткий пост для Telegram (до 80 слов):
+Вакансия: {v['title']}
+Зарплата: {v['salary']}
+Добавь эмодзи 💼💰🔨
+В конце ссылка: {v['link']}
+Пиши на украинском.
+"""
+
+        response = model.generate_content(prompt)
         return response.text.strip()
+
     except Exception as e:
-        logger.error(f"Gemini error: {e}")
-        short = text[:300] + "..." if len(text) > 300 else text
-        return f"💼 Вакансія\n\n{short}\n\n🔗 {link}"
+        logger.error(f"AI error: {e}")
+        return f"💼 {v['title']}\n💰 {v['salary']}\n🔗 {v['link']}"
 
-
-async def format_vacancy(text: str, link: str) -> str:
-    return await asyncio.to_thread(_format_vacancy_sync, text, link)
-
+# ---------- POST ----------
 
 async def collect_and_post(bot):
-    logger.info("🔍 Шукаємо вакансії в Telegram-каналах...")
-    all_messages = []
+    vacancies = await parse_work_ua()
 
-    for channel in SOURCE_CHANNELS:
-        msgs = await fetch_channel_messages(channel)
-        vacancy_msgs = [m for m in msgs if is_vacancy(m["text"])]
-        logger.info(f"@{channel}: {len(vacancy_msgs)} вакансій")
-        all_messages.extend(vacancy_msgs)
-        await asyncio.sleep(2)
-
-    logger.info(f"Всього знайдено: {len(all_messages)} вакансій")
-
-    if not all_messages:
-        logger.warning("⚠️ Вакансій не знайдено")
+    if not vacancies:
+        logger.warning("❌ Нет вакансий")
         return
 
-    published = 0
-    for msg in all_messages:
-        if published >= 3:
+    count = 0
+    for v in vacancies:
+        if count >= MAX_VACANCIES:
             break
         try:
-            post_text = await format_vacancy(msg["text"], msg["link"])
-            await bot.send_message(chat_id=CHANNEL_ID, text=post_text)
-            published_ids.add(msg["id"])
-            published += 1
-            logger.info(f"✅ Опубліковано з @{msg['channel']}")
-            await asyncio.sleep(5)
-        except TelegramError as te:
-            logger.error(f"❌ Telegram помилка: {te}")
-        except Exception as e:
-            logger.error(f"Помилка публікації: {e}")
+            text = ai_format_vacancy(v)
+            await bot.send_message(chat_id=CHANNEL_ID, text=text)
+            published_urls.add(v["link"])
+            count += 1
+            logger.info(f"✅ Опубликовано: {v['title']}")
+            await asyncio.sleep(3)
+        except TelegramError as e:
+            logger.error(f"Telegram error: {e}")
 
-    logger.info(f"📢 Опубліковано {published} вакансій")
+# ---------- SCHEDULER ----------
 
-
-# ---------- JOB для планировщика ----------
-
-async def scheduled_job(context: ContextTypes.DEFAULT_TYPE):
-    await collect_and_post(context.bot)
-
+async def scheduler(bot):
+    await asyncio.sleep(10)
+    while True:
+        await collect_and_post(bot)
+        logger.info("⏰ Ждём следующий цикл...")
+        await asyncio.sleep(POST_INTERVAL)
 
 # ---------- COMMANDS ----------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🔨 Привіт! Я бот підробітків у Києві\n"
-        "/post — опублікувати зараз\n"
-        "/status — статус"
-    )
+    await update.message.reply_text("🔨 Бот работает!\n/post — опубликовать сейчас")
 
 async def post(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔍 Шукаю вакансії...")
+    await update.message.reply_text("🔍 Ищу вакансии...")
     await collect_and_post(context.bot)
-    await update.message.reply_text("✅ Готово! Перевірте канал.")
+    await update.message.reply_text("✅ Готово")
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        f"📊 Канал: {CHANNEL_ID}\n"
-        f"Час: {datetime.now().strftime('%H:%M %d.%m.%Y')}\n"
-        f"Опубліковано постів: {len(published_ids)}"
+        f"📊 Опубликовано: {len(published_urls)}\n"
+        f"⏰ {datetime.now().strftime('%H:%M %d.%m.%Y')}"
     )
 
 # ---------- MAIN ----------
 
 def main():
+    if not TELEGRAM_TOKEN:
+        raise ValueError("❌ Нет TELEGRAM_TOKEN")
+
+    if not CHANNEL_ID:
+        raise ValueError("❌ Нет CHANNEL_ID")
+
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("post", post))
     app.add_handler(CommandHandler("status", status))
 
-    # Используем встроенный JobQueue PTB — без asyncio.create_task, без конфликтов
-    app.job_queue.run_repeating(scheduled_job, interval=POST_INTERVAL, first=10)
+    async def on_start(app):
+        logger.info("🚀 Бот запущен")
+        asyncio.create_task(scheduler(app.bot))
 
-    logger.info("🚀 Бот запускається...")
+    app.post_init = on_start
+
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
-    
-
