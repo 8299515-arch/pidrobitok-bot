@@ -1,10 +1,8 @@
 import os
 import asyncio
 import logging
-import random
 import httpx
 from bs4 import BeautifulSoup
-from datetime import datetime
 from dotenv import load_dotenv
 
 from telegram import Update, ReplyKeyboardMarkup
@@ -16,52 +14,33 @@ from telegram.ext import (
     filters,
 )
 
-from google import genai
-
 # ---------- ENV ----------
 load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # ---------- CONFIG ----------
-POST_INTERVAL = 3 * 60 * 60
 published_urls = set()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ---------- AI ----------
-client = genai.Client(api_key=GEMINI_API_KEY)
-
 # ---------- KEYBOARD ----------
 keyboard = ReplyKeyboardMarkup(
-    [["🔍 Вакансии", "🧪 TEST"]],
+    [["🔍 Вакансии", "/post"]],
     resize_keyboard=True
 )
 
 # ---------- FETCH ----------
 async def fetch_html(url):
-    async with httpx.AsyncClient(timeout=20) as client_http:
-        r = await client_http.get(url)
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.get(url)
         return r.text if r.status_code == 200 else None
 
-# ---------- SIMPLE TEST SEND ----------
-async def test_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        await context.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text="🧪 TEST MESSAGE: бот работает"
-        )
-        await update.message.reply_text("✅ TEST отправлен в канал")
-    except Exception as e:
-        await update.message.reply_text(f"❌ ERROR: {e}")
-        logger.error(e)
-
-# ---------- PARSER (упрощённый) ----------
+# ---------- PARSER ----------
 async def parse_work():
-    url = "https://www.work.ua/jobs-kyiv/"
+    url = "https://www.work.ua/jobs-kyiv-різноробочий/"
     html = await fetch_html(url)
 
     if not html:
@@ -71,7 +50,6 @@ async def parse_work():
 
     jobs = []
 
-    # берём ВСЕ ссылки
     for a in soup.find_all("a"):
         try:
             href = a.get("href", "")
@@ -99,35 +77,42 @@ async def parse_work():
             continue
 
     return jobs
-# ---------- POST ----------
+
+# ---------- POST TO CHANNEL ----------
 async def collect_and_post(context: ContextTypes.DEFAULT_TYPE):
     bot = context.bot
+
     jobs = await parse_work()
 
+    if not jobs:
+        logger.warning("No jobs found")
+        return
+
     for j in jobs[:3]:
-        text = f"""
-🔥 {j['title']}
+        text = f"""🔥 {j['title']}
 💰 {j['salary']}
-🔗 {j['link']}
-"""
+🔗 {j['link']}"""
 
         try:
             await bot.send_message(chat_id=CHANNEL_ID, text=text)
             published_urls.add(j["link"])
+            await asyncio.sleep(2)
         except Exception as e:
-            logger.error(e)
+            logger.error(f"Send error: {e}")
 
 # ---------- COMMANDS ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤖 Бот работает", reply_markup=keyboard)
+    await update.message.reply_text("🤖 Бот запущен", reply_markup=keyboard)
 
-async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def post(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🔍 ищу вакансии...")
+    await collect_and_post(context)
+    await update.message.reply_text("✅ готово")
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
 
-    if text == "🧪 TEST":
-        await test_send(update, context)
-
-    elif text == "🔍 Вакансии":
+    if text == "🔍 Вакансии":
         await update.message.reply_text("🔍 ищу...")
         await collect_and_post(context)
 
@@ -135,10 +120,9 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-    app.bot.delete_webhook(drop_pending_updates=True)
-
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_buttons))
+    app.add_handler(CommandHandler("post", post))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     app.run_polling()
 
