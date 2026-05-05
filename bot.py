@@ -61,23 +61,27 @@ async def test_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---------- PARSER (упрощённый) ----------
 async def parse_work():
-    url = "https://www.work.ua/jobs-kyiv-різноробочий/"
+    url = "https://www.work.ua/jobs-kyiv/"
     html = await fetch_html(url)
 
     if not html:
         return []
 
     soup = BeautifulSoup(html, "html.parser")
-    links = soup.select("a[href*='/jobs/']")
 
     jobs = []
 
-    for a in links[:10]:
+    # берём ВСЕ ссылки
+    for a in soup.find_all("a"):
         try:
-            title = a.get_text(strip=True)
-            href = a.get("href")
+            href = a.get("href", "")
 
-            if not href:
+            if "/jobs/" not in href:
+                continue
+
+            title = a.get_text(strip=True)
+
+            if len(title) < 10:
                 continue
 
             link = "https://www.work.ua" + href
@@ -95,7 +99,6 @@ async def parse_work():
             continue
 
     return jobs
-
 # ---------- POST ----------
 async def collect_and_post(context: ContextTypes.DEFAULT_TYPE):
     bot = context.bot
