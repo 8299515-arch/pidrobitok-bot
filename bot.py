@@ -80,17 +80,19 @@ async def parse_work():
 
 # ---------- POST TO CHANNEL ----------
 async def post(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🚀 /post СРАБОТАЛ")
+    print("POST TRIGGERED")
+
+    await update.message.reply_text("🚀 POST СРАБОТАЛ")
 
     try:
         jobs = await parse_work()
 
-        await update.message.reply_text(f"DEBUG: найдено {len(jobs)} вакансий")
-
         print("JOBS:", jobs)
 
+        await update.message.reply_text(f"DEBUG: найдено {len(jobs)}")
+
         if not jobs:
-            await update.message.reply_text("❌ пусто от парсера")
+            await update.message.reply_text("❌ пусто")
             return
 
         for j in jobs[:3]:
@@ -99,11 +101,11 @@ async def post(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=f"🔥 {j['title']}\n{j['link']}"
             )
 
-        await update.message.reply_text("✅ отправлено")
+        await update.message.reply_text("✅ DONE")
 
     except Exception as e:
-        await update.message.reply_text(f"❌ ERROR: {e}")
         print("ERROR:", e)
+        await update.message.reply_text(f"❌ ERROR: {e}")
         raise
 # ---------- COMMANDS ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
