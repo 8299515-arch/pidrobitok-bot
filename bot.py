@@ -79,11 +79,10 @@ async def parse_work():
     return jobs
 
 # ---------- POST TO CHANNEL ----------
-async def post(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("POST CALLED")
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print("TEXT RECEIVED:", update.message.text)
 
-    await update.message.reply_text("🚀 /post работает")
-
+    await update.message.reply_text(f"📩 GOT: {update.message.text}")
     try:
         jobs = await parse_work()
 
@@ -130,7 +129,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("post", post))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-
+    app.add_handler(MessageHandler(filters.ALL, handle_text))
     app.run_polling()
 
 
