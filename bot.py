@@ -47,7 +47,6 @@ async def fetch(url):
         return r.text if r.status_code == 200 else None
 
 # ----------------- PARSER -----------------
-
 async def parse_work():
     url = "https://www.work.ua/jobs-kyiv-%D1%80%D1%96%D0%B7%D0%BD%D0%BE%D1%80%D0%BE%D0%B1%D0%BE%D1%87%D0%B8%D0%B9/"
     html = await fetch(url)
@@ -56,23 +55,25 @@ async def parse_work():
         return []
 
     soup = BeautifulSoup(html, "html.parser")
-    cards = soup.select("a[href*='/jobs/']")
+
+    # 🔥 новый стабильный селектор Work.ua
+    cards = soup.select("div.card, article, a[href*='job']")
 
     jobs = []
 
-    for c in cards[:20]:
+    for c in cards[:30]:
         title = c.get_text(strip=True)
         href = c.get("href")
 
-        if not href:
+        if not title or len(title) < 10:
             continue
 
-        link = "https://www.work.ua" + href
+        if href and "/jobs/" in href:
+            link = "https://www.work.ua" + href
+        else:
+            link = url
 
         if link in published_urls:
-            continue
-
-        if len(title) < 5:
             continue
 
         jobs.append({
