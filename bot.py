@@ -103,9 +103,6 @@ async def parse_work():
             continue
 
     return jobs
-        )
-
-    
 # ---------- POST ----------
 async def collect_and_post(context: ContextTypes.DEFAULT_TYPE):
     bot = context.bot
