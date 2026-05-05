@@ -118,7 +118,6 @@ async def collect_and_post_direct(bot):
                 await bot.send_message(chat_id=CHANNEL_ID, text=post_text)
             except TelegramError as te:
                 logger.error(f"❌ Telegram помилка: {te}")
-                logger.error("Перевірте: бот є адміном каналу, CHANNEL_ID правильний")
                 continue
             published_urls.add(vacancy["link"])
             published += 1
@@ -167,20 +166,14 @@ async def check_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"✅ Канал знайдено: {chat.title}\n"
             f"👤 Статус бота: {member.status}\n"
-            f"{'✅ Бот є адміном' if member.status == 'administrator' else '❌ Бот НЕ є адміном — додайте як адміністратора!'}"
+            f"{'✅ Бот є адміном' if member.status == 'administrator' else '❌ Бот НЕ є адміном!'}"
         )
     except TelegramError as e:
-        await update.message.reply_text(
-            f"❌ Помилка доступу до каналу: {e}\n\n"
-            f"Перевірте:\n"
-            f"1. Бот доданий в канал\n"
-            f"2. Бот має права адміністратора\n"
-            f"3. CHANNEL_ID правильний: {CHANNEL_ID}"
-        )
+        await update.message.reply_text(f"❌ Помилка доступу до каналу: {e}")
 
 
 async def post_on_startup(app):
-    asyncio.create_task(scheduler(app))
+    app.create_task(scheduler(app))
 
 
 def main():
