@@ -4,7 +4,7 @@ import httpx
 from bs4 import BeautifulSoup
 from datetime import datetime
 from google import genai
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, Application
 from telegram import Update
 from telegram.error import TelegramError
 import os
@@ -128,10 +128,10 @@ async def collect_and_post_direct(bot):
     logger.info(f"📢 Опубліковано {published} вакансій")
 
 
-async def scheduler(app):
+async def scheduler(bot):
     await asyncio.sleep(30)
     while True:
-        await collect_and_post_direct(app.bot)
+        await collect_and_post_direct(bot)
         logger.info(f"⏰ Наступний пост через {POST_INTERVAL // 3600} год.")
         await asyncio.sleep(POST_INTERVAL)
 
@@ -172,10 +172,6 @@ async def check_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Помилка доступу до каналу: {e}")
 
 
-async def post_on_startup(app):
-    app.create_task(scheduler(app))
-
-
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
@@ -184,10 +180,19 @@ def main():
     app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("check", check_channel))
 
-    app.post_init = post_on_startup
-
     logger.info("🚀 Бот запущено!")
-    app.run_polling()
+
+    # Запускаємо scheduler через run_until_complete після старту polling
+    loop = asyncio.get_event_loop()
+
+    async def run():
+        async with app:
+            await app.start()
+            await app.updater.start_polling()
+            logger.info("✅ Application running, starting scheduler...")
+            await scheduler(app.bot)
+
+    loop.run_until_complete(run())
 
 
 if __name__ == "__main__":
