@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import httpx
-from bs4 import BeautifulSoup
 from datetime import datetime
 from google import genai
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
@@ -9,7 +8,6 @@ from telegram import Update
 from telegram.error import TelegramError
 import os
 from dotenv import load_dotenv
-import random
 
 load_dotenv()
 
@@ -33,93 +31,153 @@ logger = logging.getLogger(__name__)
 
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
-]
+# HH.ua API - официальный, работает с любых IP
+HH_API_URL = "https://api.hh.ru/vacancies"
+HH_HEADERS = {
+    "User-Agent": "pidrobitok-bot/1.0 (telegram bot for job vacancies)",
+    "HH-User-Agent": "pidrobitok-bot/1.0 (telegram bot for job vacancies)",
+}
 
-def get_headers():
-    return {
-        "User-Agent": random.choice(USER_AGENTS),
-        "Accept-Language": "uk-UA,ru;q=0.8,en-US;q=0.6",
-    }
-
-async def fetch_html(url: str):
-    try:
-        async with httpx.AsyncClient(timeout=20, headers=get_headers()) as client:
-            await asyncio.sleep(random.uniform(1, 3))
-            response = await client.get(url)
-            if response.status_code == 200:
-                return response.text
-    except Exception as e:
-        logger.error(f"Fetch error: {e}")
-    return None
-
-async def parse_work_ua():
+async def fetch_hh_vacancies():
+    """Получаем вакансии через официальный hh.ua API"""
     vacancies = []
-    url = "https://www.work.ua/jobs-kyiv-%D1%80%D1%96%D0%B7%D0%BD%D0%BE%D1%80%D0%BE%D0%B1%D0%BE%D1%87%D0%B8%D0%B9/"
-    html = await fetch_html(url)
-    if not html:
-        return vacancies
+    params = {
+        "text": "різноробочий OR разнорабочий OR вантажник OR грузчик OR підсобний",
+        "area": 115,          # Киев
+        "per_page": 20,
+        "order_by": "publication_time",
+        "period": 1,          # за последние сутки
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15, headers=HH_HEADERS) as client:
+            response = await client.get(HH_API_URL, params=params)
+            logger.info(f"HH API -> {response.status_code}")
+            if response.status_code != 200:
+                logger.error(f"HH API error: {response.status_code}")
+                return vacancies
 
-    soup = BeautifulSoup(html, "html.parser")
-    cards = soup.select(".job-link")
+            data = response.json()
+            items = data.get("items", [])
+            logger.info(f"HH API: знайдено {len(items)} вакансій")
 
-    for card in cards[:10]:
-        try:
-            title = card.select_one("h2").text.strip()
-            salary = card.select_one(".salary").text.strip() if card.select_one(".salary") else "Договірна"
-            href = card.get("href")
-            link = f"https://www.work.ua{href}"
+            for item in items:
+                try:
+                    link = item.get("alternate_url", "")
+                    if link in published_urls:
+                        continue
 
-            if link not in published_urls:
-                vacancies.append({"title": title, "salary": salary, "link": link})
-        except:
-            pass
+                    title = item.get("name", "Без назви")
+                    employer = item.get("employer", {}).get("name", "Не вказано")
 
+                    salary_data = item.get("salary")
+                    if salary_data:
+                        from_s = salary_data.get("from")
+                        to_s = salary_data.get("to")
+                        currency = salary_data.get("currency", "UAH")
+                        if from_s and to_s:
+                            salary = f"{from_s}–{to_s} {currency}"
+                        elif from_s:
+                            salary = f"від {from_s} {currency}"
+                        elif to_s:
+                            salary = f"до {to_s} {currency}"
+                        else:
+                            salary = "Договірна"
+                    else:
+                        salary = "Договірна"
+
+                    vacancies.append({
+                        "title": title,
+                        "company": employer,
+                        "salary": salary,
+                        "link": link,
+                    })
+                except Exception as e:
+                    logger.error(f"Помилка обробки вакансії: {e}")
+
+    except Exception as e:
+        logger.error(f"HH API fetch error: {e}")
+
+    logger.info(f"HH API: {len(vacancies)} нових вакансій")
     return vacancies
 
-def format_vacancy(v):
-    return f"💼 {v['title']}\n💰 {v['salary']}\n🔗 {v['link']}"
+
+def _format_vacancy_sync(vacancy: dict) -> str:
+    prompt = f"""Зроби короткий пост для Telegram-каналу про підробіток у Києві:
+Назва: {vacancy['title']}
+Компанія: {vacancy['company']}
+Зарплата: {vacancy['salary']}
+Посилання: {vacancy['link']}
+Використовуй емодзі 💼🔨💰, українська мова, до 80 слів, в кінці обов'язково посилання."""
+    try:
+        response = gemini_client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt
+        )
+        return response.text.strip()
+    except Exception as e:
+        logger.error(f"Gemini error: {e}")
+        return f"💼 {vacancy['title']}\n🏢 {vacancy['company']}\n💰 {vacancy['salary']}\n🔗 {vacancy['link']}"
+
+
+async def format_vacancy(vacancy: dict) -> str:
+    return await asyncio.to_thread(_format_vacancy_sync, vacancy)
+
 
 async def collect_and_post(bot):
-    vacancies = await parse_work_ua()
+    logger.info("🔍 Збираємо вакансії з HH API...")
+    vacancies = await fetch_hh_vacancies()
 
     if not vacancies:
-        logger.warning("Нет вакансий")
+        logger.warning("⚠️ Вакансій не знайдено")
         return
 
-    count = 0
-    for v in vacancies:
-        if count >= MAX_VACANCIES:
+    published = 0
+    for vacancy in vacancies:
+        if published >= MAX_VACANCIES:
             break
         try:
-            await bot.send_message(chat_id=CHANNEL_ID, text=format_vacancy(v))
-            published_urls.add(v["link"])
-            count += 1
-            await asyncio.sleep(3)
+            post_text = await format_vacancy(vacancy)
+            await bot.send_message(chat_id=CHANNEL_ID, text=post_text)
+            published_urls.add(vacancy["link"])
+            published += 1
+            logger.info(f"✅ Опубліковано: {vacancy['title']}")
+            await asyncio.sleep(5)
+        except TelegramError as te:
+            logger.error(f"❌ Telegram помилка: {te}")
         except Exception as e:
-            logger.error(e)
+            logger.error(f"Помилка публікації: {e}")
+
+    logger.info(f"📢 Опубліковано {published} вакансій")
+
 
 async def scheduler(bot):
     await asyncio.sleep(10)
     while True:
         await collect_and_post(bot)
+        logger.info(f"⏰ Наступний пост через {POST_INTERVAL // 3600} год.")
         await asyncio.sleep(POST_INTERVAL)
+
 
 # ---------- COMMANDS ----------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! Я бот вакансий 🔨")
+    await update.message.reply_text(
+        "🔨 Привіт! Я бот підробітків у Києві\n"
+        "/post — опублікувати зараз\n"
+        "/status — статус"
+    )
 
 async def post(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Публикую...")
+    await update.message.reply_text("🔍 Шукаю вакансії...")
     await collect_and_post(context.bot)
-    await update.message.reply_text("Готово")
+    await update.message.reply_text("✅ Готово! Перевірте канал.")
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"Опубликовано: {len(published_urls)}")
+    await update.message.reply_text(
+        f"📊 Канал: {CHANNEL_ID}\n"
+        f"Час: {datetime.now().strftime('%H:%M %d.%m.%Y')}\n"
+        f"Опубліковано URL: {len(published_urls)}"
+    )
 
 # ---------- MAIN ----------
 
@@ -135,10 +193,11 @@ def main():
 
     app.post_init = on_start
 
-    logger.info("🚀 Бот запускается...")
+    logger.info("🚀 Бот запускається...")
 
     app.run_polling()
 
 if __name__ == "__main__":
     main()
+    
 
