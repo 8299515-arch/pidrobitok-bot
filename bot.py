@@ -80,9 +80,9 @@ async def parse_work():
 
 # ---------- POST TO CHANNEL ----------
 async def post(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("POST TRIGGERED")
+    print("POST CALLED")
 
-    await update.message.reply_text("🚀 POST СРАБОТАЛ")
+    await update.message.reply_text("🚀 /post работает")
 
     try:
         jobs = await parse_work()
@@ -92,7 +92,7 @@ async def post(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"DEBUG: найдено {len(jobs)}")
 
         if not jobs:
-            await update.message.reply_text("❌ пусто")
+            await update.message.reply_text("❌ вакансий нет")
             return
 
         for j in jobs[:3]:
