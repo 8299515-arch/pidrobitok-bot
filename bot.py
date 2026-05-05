@@ -79,27 +79,27 @@ async def parse_work():
     return jobs
 
 # ---------- POST TO CHANNEL ----------
-async def collect_and_post(context: ContextTypes.DEFAULT_TYPE):
-    bot = context.bot
+async def post(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await update.message.reply_text("🔍 старт поиска вакансий...")
 
-    jobs = await parse_work()
+        jobs = await parse_work()
 
-    if not jobs:
-        logger.warning("No jobs found")
-        return
+        await update.message.reply_text(f"найдено: {len(jobs)}")
 
-    for j in jobs[:3]:
-        text = f"""🔥 {j['title']}
-💰 {j['salary']}
-🔗 {j['link']}"""
+        if not jobs:
+            await update.message.reply_text("❌ вакансий нет")
+            return
 
-        try:
-            await bot.send_message(chat_id=CHANNEL_ID, text=text)
-            published_urls.add(j["link"])
-            await asyncio.sleep(2)
-        except Exception as e:
-            logger.error(f"Send error: {e}")
+        for j in jobs[:3]:
+            text = f"🔥 {j['title']}\n💰 {j['salary']}\n🔗 {j['link']}"
+            await context.bot.send_message(chat_id=CHANNEL_ID, text=text)
 
+        await update.message.reply_text("✅ готово")
+
+    except Exception as e:
+        await update.message.reply_text(f"❌ ERROR: {e}")
+        raise
 # ---------- COMMANDS ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🤖 Бот запущен", reply_markup=keyboard)
