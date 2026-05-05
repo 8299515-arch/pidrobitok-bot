@@ -80,25 +80,30 @@ async def parse_work():
 
 # ---------- POST TO CHANNEL ----------
 async def post(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        await update.message.reply_text("🔍 старт поиска вакансий...")
+    await update.message.reply_text("🚀 /post СРАБОТАЛ")
 
+    try:
         jobs = await parse_work()
 
-        await update.message.reply_text(f"найдено: {len(jobs)}")
+        await update.message.reply_text(f"DEBUG: найдено {len(jobs)} вакансий")
+
+        print("JOBS:", jobs)
 
         if not jobs:
-            await update.message.reply_text("❌ вакансий нет")
+            await update.message.reply_text("❌ пусто от парсера")
             return
 
         for j in jobs[:3]:
-            text = f"🔥 {j['title']}\n💰 {j['salary']}\n🔗 {j['link']}"
-            await context.bot.send_message(chat_id=CHANNEL_ID, text=text)
+            await context.bot.send_message(
+                chat_id=CHANNEL_ID,
+                text=f"🔥 {j['title']}\n{j['link']}"
+            )
 
-        await update.message.reply_text("✅ готово")
+        await update.message.reply_text("✅ отправлено")
 
     except Exception as e:
         await update.message.reply_text(f"❌ ERROR: {e}")
+        print("ERROR:", e)
         raise
 # ---------- COMMANDS ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
