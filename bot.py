@@ -2,7 +2,6 @@ import asyncio
 import logging
 import os
 import random
-from datetime import datetime
 
 import httpx
 from bs4 import BeautifulSoup
@@ -17,52 +16,42 @@ from telegram.ext import (
     filters,
 )
 
-# ----------------- LOAD ENV -----------------
+# ----------------- ENV -----------------
 
 load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# ----------------- CONFIG -----------------
-
-POST_INTERVAL = 3 * 60 * 60
-MAX_VACANCIES = 3
-published_urls = set()
+# ----------------- LOGGING -----------------
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ----------------- HEADERS -----------------
+# ----------------- STATE -----------------
+
+published_urls = set()
+
+# ----------------- HTTP -----------------
 
 USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/124",
+    "Mozilla/5.0 Chrome/124",
+    "Mozilla/5.0 Safari/537.36",
 ]
 
-def get_headers():
-    return {
-        "User-Agent": random.choice(USER_AGENTS),
-        "Accept-Language": "uk-UA,ru;q=0.8,en-US;q=0.6",
-    }
+def headers():
+    return {"User-Agent": random.choice(USER_AGENTS)}
 
-# ----------------- FETCH -----------------
+async def fetch(url):
+    async with httpx.AsyncClient(timeout=20, headers=headers()) as client:
+        r = await client.get(url)
+        return r.text if r.status_code == 200 else None
 
-async def fetch_html(url: str):
-    try:
-        async with httpx.AsyncClient(timeout=20, headers=get_headers()) as client:
-            r = await client.get(url)
-            return r.text if r.status_code == 200 else None
-    except Exception as e:
-        logger.error(f"Fetch error: {e}")
-        return None
-
-# ----------------- PARSER (WORK.UA FIXED) -----------------
+# ----------------- PARSER -----------------
 
 async def parse_work():
     url = "https://www.work.ua/jobs-kyiv-%D1%80%D1%96%D0%B7%D0%BD%D0%BE%D1%80%D0%BE%D0%B1%D0%BE%D1%87%D0%B8%D0%B9/"
-    html = await fetch_html(url)
+    html = await fetch(url)
 
     if not html:
         return []
@@ -90,106 +79,63 @@ async def parse_work():
 
         jobs.append({
             "title": title,
-            "salary": "—",
             "link": link
         })
 
     return jobs
 
-# ----------------- FORMAT -----------------
-
-def format_job(v):
-    return (
-        f"💼 {v['title']}\n"
-        f"💰 {v['salary']}\n"
-        f"🔗 {v['link']}"
-    )
-
-# ----------------- POST -----------------
-
-async def collect_and_post(bot):
-    jobs = await parse_work()
-
-    if not jobs:
-        logger.warning("No jobs found")
-        return
-
-    count = 0
-
-    for j in jobs:
-        if count >= MAX_VACANCIES:
-            break
-
-        try:
-            text = format_job(j)
-
-            await bot.send_message(chat_id=CHANNEL_ID, text=text)
-
-            published_urls.add(j["link"])
-            count += 1
-
-            await asyncio.sleep(2)
-
-        except Exception as e:
-            logger.error(f"Telegram error: {e}")
-
-# ----------------- SCHEDULER -----------------
-
-async def scheduler(bot):
-    await asyncio.sleep(5)
-
-    while True:
-        await collect_and_post(bot)
-        await asyncio.sleep(POST_INTERVAL)
-
 # ----------------- COMMANDS -----------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔨 Бот работает")
+    await update.message.reply_text("🤖 Бот работает")
 
 async def post(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("POST CALLED")
+    print("🔥 POST CALLED")
 
-    await update.message.reply_text("🚀 /post работает")
+    await update.message.reply_text("🚀 /post активирован")
 
     jobs = await parse_work()
 
-    await update.message.reply_text(f"DEBUG: найдено {len(jobs)}")
+    await update.message.reply_text(f"📊 найдено: {len(jobs)}")
 
     if not jobs:
-        await update.message.reply_text("❌ пусто")
+        await update.message.reply_text("❌ вакансий нет")
         return
 
     for j in jobs[:3]:
+        text = f"💼 {j['title']}\n🔗 {j['link']}"
+
         await context.bot.send_message(
             chat_id=CHANNEL_ID,
-            text=format_job(j)
+            text=text
         )
+
+        published_urls.add(j["link"])
 
     await update.message.reply_text("✅ DONE")
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("TEXT:", update.message.text)
-    await update.message.reply_text(f"📩 {update.message.text}")
+    print("📩 TEXT:", update.message.text)
 
 # ----------------- MAIN -----------------
 
 def main():
+    print("🔥 BOT FILE LOADED")
+
     if not TELEGRAM_TOKEN:
-        raise ValueError("No TELEGRAM_TOKEN")
+        raise ValueError("NO TELEGRAM_TOKEN")
     if not CHANNEL_ID:
-        raise ValueError("No CHANNEL_ID")
+        raise ValueError("NO CHANNEL_ID")
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("post", post))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    # scheduler
-    asyncio.get_event_loop().create_task(scheduler(app.bot))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     app.run_polling()
 
 if __name__ == "__main__":
     main()
+   
