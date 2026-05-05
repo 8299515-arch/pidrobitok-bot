@@ -77,7 +77,6 @@ async def parse_olx_ua():
     return vacancies
 
 
-# ✅ ВИПРАВЛЕНО: обгорнуто в asyncio.to_thread щоб не блокувати event loop
 def _format_vacancy_sync(vacancy: dict) -> str:
     prompt = f"""Зроби пост для Telegram-каналу про підробіток:
 Назва: {vacancy['title']}
@@ -99,7 +98,7 @@ async def format_vacancy(vacancy: dict) -> str:
     return await asyncio.to_thread(_format_vacancy_sync, vacancy)
 
 
-async def collect_and_post(context: ContextTypes.DEFAULT_TYPE):
+async def collect_and_post_direct(bot):
     logger.info("🔍 Збираємо вакансії...")
     results = await asyncio.gather(parse_work_ua(), parse_olx_ua(), return_exceptions=True)
     all_vacancies = []
@@ -114,16 +113,13 @@ async def collect_and_post(context: ContextTypes.DEFAULT_TYPE):
         if published >= MAX_VACANCIES:
             break
         try:
-            post_text = await format_vacancy(vacancy)  # ✅ ВИПРАВЛЕНО: тепер await
-
-            # ✅ ВИПРАВЛЕНО: явна обробка помилок Telegram з детальним логуванням
+            post_text = await format_vacancy(vacancy)
             try:
-                await context.bot.send_message(chat_id=CHANNEL_ID, text=post_text)
+                await bot.send_message(chat_id=CHANNEL_ID, text=post_text)
             except TelegramError as te:
-                logger.error(f"❌ Telegram не може надіслати повідомлення в {CHANNEL_ID}: {te}")
-                logger.error("Перевірте: 1) Бот є адміном каналу, 2) CHANNEL_ID правильний (формат @username або -100...)")
+                logger.error(f"❌ Telegram помилка: {te}")
+                logger.error("Перевірте: бот є адміном каналу, CHANNEL_ID правильний")
                 continue
-
             published_urls.add(vacancy["link"])
             published += 1
             logger.info(f"✅ Опубліковано: {vacancy['title']}")
@@ -131,6 +127,14 @@ async def collect_and_post(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Помилка публікації: {e}")
     logger.info(f"📢 Опубліковано {published} вакансій")
+
+
+async def scheduler(app):
+    await asyncio.sleep(30)
+    while True:
+        await collect_and_post_direct(app.bot)
+        logger.info(f"⏰ Наступний пост через {POST_INTERVAL // 3600} год.")
+        await asyncio.sleep(POST_INTERVAL)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -144,7 +148,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def manual_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔍 Шукаю...")
-    await collect_and_post(context)
+    await collect_and_post_direct(context.bot)
     await update.message.reply_text("✅ Готово!")
 
 
@@ -156,7 +160,6 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ✅ НОВА КОМАНДА: перевірити чи бот має доступ до каналу
 async def check_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         chat = await context.bot.get_chat(CHANNEL_ID)
@@ -176,20 +179,19 @@ async def check_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def post_on_startup(app):
+    asyncio.create_task(scheduler(app))
+
+
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-
-    # ✅ ВИПРАВЛЕНО: job_queue потребує пакет python-telegram-bot[job-queue]
-    if app.job_queue:
-        app.job_queue.run_repeating(collect_and_post, interval=POST_INTERVAL, first=30)
-        logger.info(f"⏰ Авто-постинг кожні {POST_INTERVAL // 3600} год.")
-    else:
-        logger.warning("⚠️ job_queue недоступний! Встановіть: pip install 'python-telegram-bot[job-queue]'")
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("post", manual_post))
     app.add_handler(CommandHandler("status", status))
-    app.add_handler(CommandHandler("check", check_channel))  # ✅ НОВА КОМАНДА
+    app.add_handler(CommandHandler("check", check_channel))
+
+    app.post_init = post_on_startup
 
     logger.info("🚀 Бот запущено!")
     app.run_polling()
@@ -197,5 +199,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-   
-  
