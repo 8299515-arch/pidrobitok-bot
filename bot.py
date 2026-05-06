@@ -1,243 +1,174 @@
 import os
-import json
-import logging
-
-import httpx
-from bs4 import BeautifulSoup
+import sqlite3
+import requests
 from dotenv import load_dotenv
 
-from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-)
+from fastapi import FastAPI
+from threading import Thread
+
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 
 # ---------------- INIT ----------------
 
-print("🔥 BOT FILE LOADED (V2)")
+print("🚀 V12 SAAS STARTING...")
 
 load_dotenv()
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHANNEL_ID = os.getenv("CHANNEL_ID")
+TOKEN = os.getenv("TELEGRAM_TOKEN")
 
-SEEN_FILE = "seen.json"
+API_URL = "http://127.0.0.1:8000"
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# ---------------- DATABASE ----------------
 
-# ---------------- MEMORY ----------------
+conn = sqlite3.connect("v12.db", check_same_thread=False)
+cur = conn.cursor()
 
-def load_seen():
-    if not os.path.exists(SEEN_FILE):
-        return set()
-    try:
-        with open(SEEN_FILE, "r") as f:
-            return set(json.load(f))
-    except:
-        return set()
+cur.execute("""
+CREATE TABLE IF NOT EXISTS users (
+id INTEGER PRIMARY KEY,
+premium INTEGER DEFAULT 0
+)
+""")
 
-def save_seen(seen):
-    with open(SEEN_FILE, "w") as f:
-        json.dump(list(seen), f)
+cur.execute("""
+CREATE TABLE IF NOT EXISTS jobs (
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+title TEXT,
+boost INTEGER DEFAULT 0,
+price INTEGER DEFAULT 0
+)
+""")
 
-# ---------------- HTTP ----------------
+cur.execute("""
+CREATE TABLE IF NOT EXISTS apps (
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+job_id INTEGER,
+user_id INTEGER
+)
+""")
 
-async def fetch(url):
-    headers = {
-        "User-Agent": "Mozilla/5.0"
-    }
+conn.commit()
 
-    async with httpx.AsyncClient(timeout=20, headers=headers) as client:
-        r = await client.get(url)
-        return r.text if r.status_code == 200 else None
+# ---------------- FASTAPI (BACKEND) ----------------
 
-# ---------------- SOURCES ----------------
+app_api = FastAPI(title="V12 SaaS Core")
 
-async def parse_work():
-    url = "https://www.work.ua/jobs-kyiv-%D1%80%D1%96%D0%B7%D0%BD%D0%BE%D1%80%D0%BE%D0%B1%D0%BE%D1%87%D0%B8%D0%B9/"
-    html = await fetch(url)
+@app_api.post("/job")
+def create_job(title: str, boost: bool = False):
+    price = 10 if boost else 0
 
-    if not html:
-        return []
+    cur.execute(
+        "INSERT INTO jobs (title, boost, price) VALUES (?, ?, ?)",
+        (title, int(boost), price)
+    )
+    conn.commit()
 
-    soup = BeautifulSoup(html, "html.parser")
+    return {"status": "created", "boost": boost, "price": price}
 
-    jobs = []
+@app_api.get("/jobs")
+def get_jobs():
+    cur.execute("SELECT * FROM jobs ORDER BY boost DESC, id DESC")
+    return cur.fetchall()
 
-    for a in soup.select("a"):
-        title = a.get_text(strip=True)
-        href = a.get("href")
+@app_api.post("/premium")
+def premium(user_id: int):
+    cur.execute("INSERT OR REPLACE INTO users (id, premium) VALUES (?, 1)", (user_id,))
+    conn.commit()
+    return {"status": "premium activated"}
 
-        if not title or not href:
-            continue
+# ---------------- BOT CORE ----------------
 
-        if len(title) < 10:
-            continue
+def get_user(user_id):
+    cur.execute("SELECT * FROM users WHERE id=?", (user_id,))
+    user = cur.fetchone()
 
-        if "work.ua" not in href:
-            href = "https://www.work.ua" + href
+    if not user:
+        cur.execute("INSERT INTO users (id, premium) VALUES (?, 0)", (user_id,))
+        conn.commit()
 
-        jobs.append({
-            "title": title,
-            "link": href,
-            "source": "work"
-        })
+    return user
 
-    return jobs[:10]
-
-async def parse_olx():
-    url = "https://www.olx.ua/uk/rabota/"
-    html = await fetch(url)
-
-    if not html:
-        return []
-
-    soup = BeautifulSoup(html, "html.parser")
-
-    jobs = []
-
-    for a in soup.select("a"):
-        title = a.get_text(strip=True)
-        href = a.get("href")
-
-        if not title or not href:
-            continue
-
-        if len(title) < 10:
-            continue
-
-        if "olx.ua" not in href:
-            href = "https://www.olx.ua" + href
-
-        jobs.append({
-            "title": title,
-            "link": href,
-            "source": "olx"
-        })
-
-    return jobs[:10]
-
-# ---------------- AI LOGIC ----------------
-
-def classify_job(title):
-    t = title.lower()
-
-    bad = ["курс", "обуч", "инвест", "crypto", "заработок", "обучение"]
-    if any(x in t for x in bad):
-        return "bad"
-
-    if any(x in t for x in ["склад", "груз", "разнораб"]):
-        return "warehouse"
-
-    if any(x in t for x in ["водитель", "курьер", "доставка"]):
-        return "courier"
-
-    if any(x in t for x in ["офис", "менеджер", "админ"]):
-        return "office"
-
-    if any(x in t for x in ["строит", "ремонт"]):
-        return "construction"
-
-    return "other"
-
-def filter_jobs(jobs):
-    result = []
-
-    for j in jobs:
-        cat = classify_job(j["title"])
-
-        if cat == "bad":
-            continue
-
-        j["category"] = cat
-        result.append(j)
-
-    return result
-
-# ---------------- RERAISE TEXT ----------------
-
-async def rewrite_job(job):
-    return f"""
-💼 {job['title']}
-
-📂 Категория: {job.get('category', 'other')}
-
-Мы нашли свежую вакансию для тебя.
-
-📍 Киев
-💰 Условия обсуждаются напрямую с работодателем
-
-🧑‍💼 Как связаться:
-Открой оригинальное объявление и напиши работодателю.
-"""
-
-# ---------------- HANDLERS ----------------
+# ---------------- COMMANDS ----------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("📩 /start")
-    await update.message.reply_text("🤖 V2 бот работает")
+    get_user(update.effective_user.id)
 
-async def post(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("📩 /post V2")
+    await update.message.reply_text(
+        "🚀 V12 SAAS PLATFORM\n\n"
+        "/jobs — вакансии\n"
+        "/premium — PRO доступ"
+    )
 
-    work = await parse_work()
-    olx = await parse_olx()
+async def jobs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    r = requests.get(f"{API_URL}/jobs")
 
-    jobs = filter_jobs(work + olx)
+    try:
+        jobs = r.json()
+    except:
+        await update.message.reply_text("❌ API error")
+        return
 
-    seen = load_seen()
-    new_jobs = []
+    if not jobs:
+        await update.message.reply_text("📭 Нет вакансий")
+        return
 
-    for j in jobs:
-        if j["link"] in seen:
-            continue
-        new_jobs.append(j)
-        seen.add(j["link"])
+    for j in jobs[:5]:
+        text = f"""
+💼 {j[1]}
 
-    save_seen(seen)
+{"🔥 BOOSTED" if j[2] else "📌 стандарт"}
 
-    await update.message.reply_text(f"📊 V2 найдено: {len(new_jobs)}")
+💰 цена: {j[3]}$
+"""
 
-    for j in new_jobs[:3]:
-        text = await rewrite_job(j)
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📩 Отклик", callback_data=f"apply_{j[0]}")]
+        ])
 
-        await context.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=text
-        )
+        await update.message.reply_text(text, reply_markup=keyboard)
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("📩 TEXT:", update.message.text)
+async def premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    requests.post(f"{API_URL}/premium?user_id={update.effective_user.id}")
+
+    await update.message.reply_text("💎 Premium активирован (V12 demo)")
+
+async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+
+    job_id = q.data.replace("apply_", "")
+
+    cur.execute(
+        "INSERT INTO apps (job_id, user_id) VALUES (?, ?)",
+        (job_id, q.from_user.id)
+    )
+    conn.commit()
+
+    await q.message.reply_text("📩 Отклик отправлен")
+
+# ---------------- RUN API ----------------
+
+def run_api():
+    import uvicorn
+    uvicorn.run(app_api, host="127.0.0.1", port=8000)
 
 # ---------------- MAIN ----------------
 
 def main():
-    print("🚀 STARTING V2 BOT...")
+    Thread(target=run_api, daemon=True).start()
 
-    if not TELEGRAM_TOKEN:
-        print("❌ NO TOKEN")
-        return
-
-    if not CHANNEL_ID:
-        print("❌ NO CHANNEL")
-        return
-
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("post", post))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_handler(CommandHandler("jobs", jobs))
+    app.add_handler(CommandHandler("premium", premium))
 
-    print("✅ V2 READY")
+    app.add_handler(CallbackQueryHandler(callback))
 
-    app.run_polling(drop_pending_updates=True)
+    print("✅ V12 SAAS READY")
 
-# ---------------- RUN ----------------
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
- 
