@@ -1,152 +1,189 @@
 import os
+import sys
 import sqlite3
 from dotenv import load_dotenv
 
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    ContextTypes,
+    filters
+)
 
-print("🚀 V13 BROADCAST SYSTEM STARTED")
+print("🚀 V12.3 SAFE STARTED")
+
+# ---------------- LOCK SYSTEM ----------------
+
+LOCK_FILE = "bot.lock"
+
+if os.path.exists(LOCK_FILE):
+    print("⛔ BOT ALREADY RUNNING (LOCK ACTIVE)")
+    sys.exit()
+
+with open(LOCK_FILE, "w") as f:
+    f.write("running")
+
+print("🔒 LOCK CREATED")
+
+# ---------------- ENV ----------------
 
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 # ---------------- DB ----------------
 
-conn = sqlite3.connect("v13.db", check_same_thread=False)
+conn = sqlite3.connect("v12.db", check_same_thread=False)
 cur = conn.cursor()
 
 cur.execute("""
 CREATE TABLE IF NOT EXISTS users (
-id INTEGER PRIMARY KEY,
-role TEXT,
-city TEXT DEFAULT '',
-notify INTEGER DEFAULT 1
+id INTEGER PRIMARY KEY
 )
 """)
 
 cur.execute("""
 CREATE TABLE IF NOT EXISTS jobs (
 id INTEGER PRIMARY KEY AUTOINCREMENT,
-title TEXT,
-city TEXT
+title TEXT
+)
+""")
+
+cur.execute("""
+CREATE TABLE IF NOT EXISTS chats (
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+job_id INTEGER,
+candidate_id INTEGER,
+employer_id INTEGER
+)
+""")
+
+cur.execute("""
+CREATE TABLE IF NOT EXISTS messages (
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+chat_id INTEGER,
+sender_id INTEGER,
+text TEXT
 )
 """)
 
 conn.commit()
 
-# ---------------- USERS ----------------
+# ---------------- HELPERS ----------------
 
-def set_role(user_id, role):
-    cur.execute("""
-    INSERT OR IGNORE INTO users (id, role, notify)
-    VALUES (?, ?, 1)
-    """, (user_id, role))
-
-    cur.execute("UPDATE users SET role=? WHERE id=?", (role, user_id))
+def add_job(title):
+    cur.execute("INSERT INTO jobs (title) VALUES (?)", (title,))
     conn.commit()
 
-def set_city(user_id, city):
-    cur.execute("UPDATE users SET city=? WHERE id=?", (city, user_id))
-    conn.commit()
-
-def get_users(role):
-    cur.execute("SELECT id, city FROM users WHERE role=? AND notify=1", (role,))
+def get_jobs():
+    cur.execute("SELECT * FROM jobs ORDER BY id DESC")
     return cur.fetchall()
 
-# ---------------- JOBS ----------------
-
-def add_job(title, city):
-    cur.execute("INSERT INTO jobs (title, city) VALUES (?, ?)", (title, city))
-    conn.commit()
-
-# ---------------- BROADCAST ----------------
-
-async def broadcast_to_candidates(app, job_title, job_city):
-    users = get_users("candidate")
-
-    for user_id, city in users:
-        if city and city.lower() not in job_city.lower():
-            continue
-
-        await app.bot.send_message(
-            user_id,
-            f"🔥 НОВАЯ ВАКАНСИЯ\n\n{job_title}\n📍 {job_city}"
-        )
-
-async def broadcast_to_employers(app, candidate_info):
-    users = get_users("employer")
-
-    for user_id, city in users:
-        await app.bot.send_message(
-            user_id,
-            f"👷 НОВЫЙ КАНДИДАТ\n\n{candidate_info}"
-        )
+def get_chat(user_id):
+    cur.execute("""
+        SELECT id, candidate_id, employer_id FROM chats
+        WHERE candidate_id=? OR employer_id=?
+        ORDER BY id DESC LIMIT 1
+    """, (user_id, user_id))
+    return cur.fetchone()
 
 # ---------------- COMMANDS ----------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🚀 V13 SMART SYSTEM\n\n"
-        "/candidate — ищу работу\n"
-        "/employer — работодатель\n"
-        "/setcity Киев — город\n"
-        "/addjob текст город"
+        "🚀 V12.3 SAFE BOT\n\n"
+        "/jobs — вакансии\n"
+        "/postjob текст — добавить вакансию"
     )
 
-async def candidate(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    set_role(update.effective_user.id, "candidate")
-    await update.message.reply_text("👤 Вы кандидат")
+async def postjob(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = " ".join(context.args)
 
-async def employer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    set_role(update.effective_user.id, "employer")
-    await update.message.reply_text("🏢 Вы работодатель")
-
-async def setcity(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    city = " ".join(context.args)
-    set_city(update.effective_user.id, city)
-    await update.message.reply_text(f"📍 Город установлен: {city}")
-
-# ---------------- ADD JOB + AUTO BROADCAST ----------------
-
-async def addjob(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    parts = " ".join(context.args).split(",")
-
-    if len(parts) < 2:
-        await update.message.reply_text("❌ формат: текст, город")
+    if not text:
+        await update.message.reply_text("❌ Введите текст")
         return
 
-    title = parts[0].strip()
-    city = parts[1].strip()
-
-    add_job(title, city)
+    add_job(text)
 
     await update.message.reply_text("🏢 Вакансия добавлена")
 
-    # 🔥 авто-рассылка кандидатам
-    await broadcast_to_candidates(context.application, title, city)
+async def jobs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    jobs = get_jobs()
 
-# ---------------- SIMPLE CANDIDATE POST (SIMULATION) ----------------
+    if not jobs:
+        await update.message.reply_text("📭 Нет вакансий")
+        return
 
-async def fake_candidate(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = "👤 Опыт: 2 года\nНавыки: продажи, коммуникация"
+    for j in jobs:
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📩 Отклик", callback_data=f"apply_{j[0]}")]
+        ])
 
-    await broadcast_to_employers(context.application, text)
+        await update.message.reply_text(f"💼 {j[1]}", reply_markup=keyboard)
+
+# ---------------- CHAT CREATE ----------------
+
+async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+
+    job_id = int(q.data.replace("apply_", ""))
+    candidate_id = q.from_user.id
+
+    cur.execute("""
+        INSERT INTO chats (job_id, candidate_id, employer_id)
+        VALUES (?, ?, ?)
+    """, (job_id, candidate_id, 0))
+
+    conn.commit()
+
+    await q.message.reply_text("💬 Чат создан. Пишите сообщение.")
+
+# ---------------- MESSAGE ROUTING ----------------
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    text = update.message.text
+
+    chat = get_chat(user_id)
+
+    if not chat:
+        return
+
+    chat_id, candidate_id, employer_id = chat
+
+    cur.execute("""
+        INSERT INTO messages (chat_id, sender_id, text)
+        VALUES (?, ?, ?)
+    """, (chat_id, user_id, text))
+
+    conn.commit()
+
+    await update.message.reply_text("📨 Сообщение отправлено")
 
 # ---------------- MAIN ----------------
 
 def main():
-    app = ApplicationBuilder().token(TOKEN).build()
+    try:
+        app = ApplicationBuilder().token(TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("candidate", candidate))
-    app.add_handler(CommandHandler("employer", employer))
-    app.add_handler(CommandHandler("setcity", setcity))
-    app.add_handler(CommandHandler("addjob", addjob))
-    app.add_handler(CommandHandler("candidatepost", fake_candidate))
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(CommandHandler("jobs", jobs))
+        app.add_handler(CommandHandler("postjob", postjob))
 
-    print("✅ V13 READY (SMART BROADCAST)")
+        app.add_handler(CallbackQueryHandler(callback))
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    app.run_polling()
+        print("✅ BOT RUNNING SAFE MODE")
+
+        app.run_polling()
+
+    finally:
+        if os.path.exists(LOCK_FILE):
+            os.remove(LOCK_FILE)
+            print("🧹 LOCK REMOVED")
 
 if __name__ == "__main__":
     main()
