@@ -39,6 +39,7 @@ async def fetch(url):
         return r.text if r.status_code == 200 else None
 
 # ---------------- PARSER ----------------
+
 async def parse_work():
     url = "https://www.work.ua/jobs-kyiv-%D1%80%D1%96%D0%B7%D0%BD%D0%BE%D1%80%D0%BE%D0%B1%D0%BE%D1%87%D0%B8%D0%B9/"
     html = await fetch(url)
@@ -50,7 +51,7 @@ async def parse_work():
 
     jobs = []
 
-    # 🔥 способ 1
+    # основной способ
     cards = soup.select("div.job-link")
 
     for c in cards:
@@ -61,7 +62,7 @@ async def parse_work():
                 "link": "https://www.work.ua" + a.get("href")
             })
 
-    # 🔥 если пусто — fallback
+    # fallback (если сайт меняется)
     if not jobs:
         links = soup.select("a[href*='/jobs/']")
 
@@ -79,7 +80,31 @@ async def parse_work():
 
     return jobs[:10]
 
-# ---------------- TEXT ----------------
+# ---------------- HANDLERS ----------------
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print("📩 /start")
+    await update.message.reply_text("🤖 Бот работает")
+
+async def post(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print("📩 /post")
+
+    jobs = await parse_work()
+
+    await update.message.reply_text(f"📊 найдено: {len(jobs)}")
+
+    if not jobs:
+        await update.message.reply_text("❌ вакансий нет")
+        return
+
+    for j in jobs[:3]:
+        text = f"💼 {j['title']}\n🔗 {j['link']}"
+
+        # отправка в канал
+        await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=text
+        )
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print("📩 TEXT:", update.message.text)
@@ -90,7 +115,7 @@ def main():
     print("🚀 STARTING BOT...")
 
     if not TELEGRAM_TOKEN:
-        print("❌ NO TOKEN")
+        print("❌ NO TELEGRAM_TOKEN")
         return
 
     if not CHANNEL_ID:
