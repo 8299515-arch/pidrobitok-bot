@@ -2,7 +2,6 @@ import os
 import sys
 import time
 import sqlite3
-import psutil
 from dotenv import load_dotenv
 
 from telegram import Update
@@ -17,37 +16,20 @@ from telegram.ext import (
 from telegram.request import HTTPXRequest
 from telegram.error import TimedOut, NetworkError, Conflict
 
-print("🚀 V16 SAFE ULTIMATE STARTED")
+print("🚀 V16 CLEAN PRODUCTION STARTED")
 
-# ================= SAFE GUARD (ANTI-CONFLICT) =================
+# ================= SIMPLE LOCK =================
 
 LOCK_FILE = "bot.lock"
 
-def is_running(pid):
-    try:
-        return psutil.pid_exists(pid)
-    except:
-        return False
-
 if os.path.exists(LOCK_FILE):
-    try:
-        with open(LOCK_FILE, "r") as f:
-            old_pid = int(f.read().strip())
-
-        if is_running(old_pid):
-            print("⛔ BOT ALREADY RUNNING → EXIT")
-            sys.exit()
-
-        else:
-            print("🧹 OLD LOCK REMOVED")
-
-    except:
-        print("🧹 BROKEN LOCK FIXED")
+    print("⛔ BOT ALREADY RUNNING")
+    sys.exit()
 
 with open(LOCK_FILE, "w") as f:
-    f.write(str(os.getpid()))
+    f.write("running")
 
-print(f"🔒 LOCK ACTIVE | PID {os.getpid()}")
+print("🔒 LOCK CREATED")
 
 import atexit
 
@@ -71,35 +53,62 @@ cur = conn.cursor()
 cur.execute("""
 CREATE TABLE IF NOT EXISTS jobs (
 id INTEGER PRIMARY KEY AUTOINCREMENT,
-text TEXT
+text TEXT,
+pro INTEGER DEFAULT 0
 )
 """)
 
 conn.commit()
 
-# ================= JOB SYSTEM =================
+# ================= AI FORMAT =================
+
+def format_job(text, pro=False):
+    tag = "💎 PRO" if pro else "💼"
+    return f"""{tag} Вакансия
+
+📌 {text}
+
+💡 Условия: стабильная работа
+🤝 Требования: ответственность
+📍 Формат: Киев / удалённо
+"""
+
+# ================= COMMANDS =================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🚀 V16 SAFE ULTIMATE\n\n"
-        "/postjob текст — добавить вакансию\n"
-        "/jobs — список вакансий"
+        "🚀 JOB BOT\n\n"
+        "/postjob текст — вакансия\n"
+        "/projob текст — PRO вакансия\n"
+        "/jobs — список\n"
     )
 
 async def postjob(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = " ".join(context.args)
 
     if not text:
-        await update.message.reply_text("❌ пустая вакансия")
+        await update.message.reply_text("❌ пусто")
         return
 
-    cur.execute("INSERT INTO jobs (text) VALUES (?)", (text,))
+    cur.execute("INSERT INTO jobs (text, pro) VALUES (?, 0)", (text,))
     conn.commit()
 
-    await update.message.reply_text("🏢 вакансия добавлена")
+    await update.message.reply_text("🏢 добавлено")
+
+async def projob(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = " ".join(context.args)
+
+    if not text:
+        await update.message.reply_text("❌ пусто")
+        return
+
+    cur.execute("INSERT INTO jobs (text, pro) VALUES (?, 1)", (text,))
+    conn.commit()
+
+    await update.message.reply_text("💎 PRO добавлено")
 
 async def jobs(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    cur.execute("SELECT text FROM jobs ORDER BY id DESC")
+    cur.execute("SELECT id, text, pro FROM jobs ORDER BY pro DESC, id DESC")
     rows = cur.fetchall()
 
     if not rows:
@@ -107,7 +116,20 @@ async def jobs(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     for r in rows[:10]:
-        await update.message.reply_text(f"💼 {r[0]}")
+        msg = format_job(r[1], r[2] == 1)
+        await update.message.reply_text(f"ID {r[0]}\n{msg}")
+
+# ================= SIMPLE AI CHAT =================
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.lower()
+
+    if "работа" in text:
+        await update.message.reply_text("📌 смотри /jobs")
+    elif "зарплата" in text:
+        await update.message.reply_text("💰 обсуждается с работодателем")
+    else:
+        await update.message.reply_text("💬 сообщение принято")
 
 # ================= ERROR HANDLER =================
 
@@ -126,13 +148,16 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("postjob", postjob))
+    app.add_handler(CommandHandler("projob", projob))
     app.add_handler(CommandHandler("jobs", jobs))
+
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     app.add_error_handler(error_handler)
 
     while True:
         try:
-            print("✅ BOT RUNNING SAFE ULTIMATE MODE")
+            print("✅ BOT RUNNING CLEAN MODE")
 
             app.run_polling(
                 drop_pending_updates=True,
@@ -140,11 +165,11 @@ def main():
             )
 
         except (TimedOut, NetworkError, Conflict) as e:
-            print(f"⚠️ RESTARTING BOT: {e}")
+            print(f"⚠️ RESTART: {e}")
             time.sleep(3)
 
         except Exception as e:
-            print(f"🔥 FATAL ERROR: {e}")
+            print(f"🔥 FATAL: {e}")
             time.sleep(5)
 
 # ================= START =================
