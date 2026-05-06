@@ -1,17 +1,11 @@
 import os
 from dotenv import load_dotenv
 
+from telegram import Update, ReplyKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+
 import httpx
 from bs4 import BeautifulSoup
-
-from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-)
 
 from google import genai
 
@@ -27,17 +21,17 @@ if not BOT_TOKEN:
     raise Exception("❌ BOT_TOKEN не найден в .env")
 
 # ======================
-# AI (СТАБИЛЬНЫЙ НОВЫЙ SDK)
+# AI (НОВЫЙ СТАБИЛЬНЫЙ SDK)
 # ======================
 client = genai.Client(api_key=GOOGLE_API_KEY)
 
 def ask_ai(text: str):
     try:
-        response = client.models.generate_content(
+        res = client.models.generate_content(
             model="gemini-1.5-flash",
             contents=text
         )
-        return response.text
+        return res.text
     except Exception as e:
         return f"AI ошибка: {e}"
 
@@ -53,7 +47,7 @@ keyboard = ReplyKeyboardMarkup(
 )
 
 # ======================
-# ПАРСЕР ВАКАНСИЙ (простая версия)
+# ВАКАНСИИ (простая версия)
 # ======================
 def get_jobs():
     try:
@@ -76,12 +70,12 @@ def get_jobs():
 # ======================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🚀 V4 PRO STABLE\n\nВыбери действие:",
+        "🚀 V4 FIXED BOT\n\nВыбери действие:",
         reply_markup=keyboard
     )
 
 # ======================
-# ВАКАНСИИ
+# JOBS
 # ======================
 async def jobs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = get_jobs()
@@ -128,9 +122,8 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, router))
 
-    print("🚀 V4 PRO STABLE RUNNING...")
+    print("🚀 V4 FIXED RUNNING...")
     app.run_polling()
 
 if __name__ == "__main__":
     main()
- 
