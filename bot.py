@@ -17,7 +17,7 @@ from telegram.ext import (
 
 # ---------------- INIT ----------------
 
-print("🔥 BOT FILE LOADED")
+print("🔥 BOT FILE LOADED (V2)")
 
 load_dotenv()
 
@@ -40,7 +40,6 @@ def load_seen():
     except:
         return set()
 
-
 def save_seen(seen):
     with open(SEEN_FILE, "w") as f:
         json.dump(list(seen), f)
@@ -49,15 +48,14 @@ def save_seen(seen):
 
 async def fetch(url):
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept-Language": "ru-RU,ru;q=0.9,uk;q=0.8,en-US;q=0.7"
+        "User-Agent": "Mozilla/5.0"
     }
 
     async with httpx.AsyncClient(timeout=20, headers=headers) as client:
         r = await client.get(url)
         return r.text if r.status_code == 200 else None
 
-# ---------------- PARSER ----------------
+# ---------------- SOURCES ----------------
 
 async def parse_work():
     url = "https://www.work.ua/jobs-kyiv-%D1%80%D1%96%D0%B7%D0%BD%D0%BE%D1%80%D0%BE%D0%B1%D0%BE%D1%87%D0%B8%D0%B9/"
@@ -70,45 +68,128 @@ async def parse_work():
 
     jobs = []
 
-    cards = soup.select("div.job-link")
+    for a in soup.select("a"):
+        title = a.get_text(strip=True)
+        href = a.get("href")
 
-    for c in cards:
-        a = c.find("a")
-        if a:
-            jobs.append({
-                "title": a.get_text(strip=True),
-                "link": "https://www.work.ua" + a.get("href")
-            })
+        if not title or not href:
+            continue
 
-    if not jobs:
-        links = soup.select("a[href*='/jobs/']")
+        if len(title) < 10:
+            continue
 
-        for a in links:
-            title = a.get_text(strip=True)
-            href = a.get("href")
+        if "work.ua" not in href:
+            href = "https://www.work.ua" + href
 
-            if not title or len(title) < 10:
-                continue
-
-            jobs.append({
-                "title": title,
-                "link": "https://www.work.ua" + href
-            })
+        jobs.append({
+            "title": title,
+            "link": href,
+            "source": "work"
+        })
 
     return jobs[:10]
+
+async def parse_olx():
+    url = "https://www.olx.ua/uk/rabota/"
+    html = await fetch(url)
+
+    if not html:
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    jobs = []
+
+    for a in soup.select("a"):
+        title = a.get_text(strip=True)
+        href = a.get("href")
+
+        if not title or not href:
+            continue
+
+        if len(title) < 10:
+            continue
+
+        if "olx.ua" not in href:
+            href = "https://www.olx.ua" + href
+
+        jobs.append({
+            "title": title,
+            "link": href,
+            "source": "olx"
+        })
+
+    return jobs[:10]
+
+# ---------------- AI LOGIC ----------------
+
+def classify_job(title):
+    t = title.lower()
+
+    bad = ["курс", "обуч", "инвест", "crypto", "заработок", "обучение"]
+    if any(x in t for x in bad):
+        return "bad"
+
+    if any(x in t for x in ["склад", "груз", "разнораб"]):
+        return "warehouse"
+
+    if any(x in t for x in ["водитель", "курьер", "доставка"]):
+        return "courier"
+
+    if any(x in t for x in ["офис", "менеджер", "админ"]):
+        return "office"
+
+    if any(x in t for x in ["строит", "ремонт"]):
+        return "construction"
+
+    return "other"
+
+def filter_jobs(jobs):
+    result = []
+
+    for j in jobs:
+        cat = classify_job(j["title"])
+
+        if cat == "bad":
+            continue
+
+        j["category"] = cat
+        result.append(j)
+
+    return result
+
+# ---------------- RERAISE TEXT ----------------
+
+async def rewrite_job(job):
+    return f"""
+💼 {job['title']}
+
+📂 Категория: {job.get('category', 'other')}
+
+Мы нашли свежую вакансию для тебя.
+
+📍 Киев
+💰 Условия обсуждаются напрямую с работодателем
+
+🧑‍💼 Как связаться:
+Открой оригинальное объявление и напиши работодателю.
+"""
 
 # ---------------- HANDLERS ----------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print("📩 /start")
-    await update.message.reply_text("🤖 Бот работает")
+    await update.message.reply_text("🤖 V2 бот работает")
 
 async def post(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("📩 /post")
+    print("📩 /post V2")
 
-    jobs = await parse_work()
+    work = await parse_work()
+    olx = await parse_olx()
+
+    jobs = filter_jobs(work + olx)
+
     seen = load_seen()
-
     new_jobs = []
 
     for j in jobs:
@@ -119,38 +200,15 @@ async def post(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     save_seen(seen)
 
-    await update.message.reply_text(f"📊 новых: {len(new_jobs)}")
-
-    if not new_jobs:
-        await update.message.reply_text("❌ новых вакансий нет")
-        return
+    await update.message.reply_text(f"📊 V2 найдено: {len(new_jobs)}")
 
     for j in new_jobs[:3]:
-        text = f"💼 {j['title']}\n🔗 {j['link']}"
+        text = await rewrite_job(j)
 
         await context.bot.send_message(
             chat_id=CHANNEL_ID,
             text=text
         )
-
-async def auto_post(context: ContextTypes.DEFAULT_TYPE):
-    jobs = await parse_work()
-    seen = load_seen()
-
-    for j in jobs:
-        if j["link"] in seen:
-            continue
-
-        seen.add(j["link"])
-
-        text = f"💼 {j['title']}\n🔗 {j['link']}"
-
-        await context.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=text
-        )
-
-    save_seen(seen)
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print("📩 TEXT:", update.message.text)
@@ -158,14 +216,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------------- MAIN ----------------
 
 def main():
-    print("🚀 STARTING BOT...")
+    print("🚀 STARTING V2 BOT...")
 
     if not TELEGRAM_TOKEN:
-        print("❌ NO TELEGRAM_TOKEN")
+        print("❌ NO TOKEN")
         return
 
     if not CHANNEL_ID:
-        print("❌ NO CHANNEL_ID")
+        print("❌ NO CHANNEL")
         return
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
@@ -174,10 +232,7 @@ def main():
     app.add_handler(CommandHandler("post", post))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    # 🔥 AUTO POSTING каждые 5 минут
-    app.job_queue.run_repeating(auto_post, interval=300, first=10)
-
-    print("✅ BOT READY")
+    print("✅ V2 READY")
 
     app.run_polling(drop_pending_updates=True)
 
@@ -185,3 +240,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+ 
