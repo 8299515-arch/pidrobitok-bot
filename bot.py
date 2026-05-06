@@ -11,7 +11,7 @@ from telegram.ext import (
     filters
 )
 
-print("🚀 V15 REAL CHAT STARTED")
+print("🚀 V16 SMART JOB PLATFORM STARTED")
 
 # ================= ENV =================
 
@@ -20,7 +20,7 @@ TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 # ================= DB =================
 
-conn = sqlite3.connect("v15.db", check_same_thread=False)
+conn = sqlite3.connect("v16.db", check_same_thread=False)
 cur = conn.cursor()
 
 cur.execute("""
@@ -34,24 +34,9 @@ cur.execute("""
 CREATE TABLE IF NOT EXISTS jobs (
 id INTEGER PRIMARY KEY AUTOINCREMENT,
 employer_id INTEGER,
-text TEXT
-)
-""")
-
-cur.execute("""
-CREATE TABLE IF NOT EXISTS applications (
-id INTEGER PRIMARY KEY AUTOINCREMENT,
-job_id INTEGER,
-candidate_id INTEGER
-)
-""")
-
-cur.execute("""
-CREATE TABLE IF NOT EXISTS chats (
-id INTEGER PRIMARY KEY AUTOINCREMENT,
-room_id TEXT,
-sender_id INTEGER,
-text TEXT
+text TEXT,
+city TEXT,
+pro INTEGER DEFAULT 0
 )
 """)
 
@@ -64,121 +49,89 @@ def set_role(user_id, role):
     cur.execute("UPDATE users SET role=? WHERE id=?", (role, user_id))
     conn.commit()
 
-def get_role(user_id):
-    cur.execute("SELECT role FROM users WHERE id=?", (user_id,))
-    row = cur.fetchone()
-    return row[0] if row else None
+def ai_format_job(text):
+    # простая “AI-имитация” без OpenAI (эконом-режим)
+    return f"""
+🛒 Вакансия
 
-def get_employer(job_id):
-    cur.execute("SELECT employer_id FROM jobs WHERE id=?", (job_id,))
-    row = cur.fetchone()
-    return row[0] if row else None
+📌 Описание:
+{text}
+
+💡 Условия: стабильная работа
+🤝 Требуется: ответственность и базовые навыки
+📍 Формат: удалённо / офлайн
+"""
 
 # ================= COMMANDS =================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🚀 V15 JOB CHAT\n\n"
-        "/candidate — ищу работу\n"
-        "/employer — работодатель\n"
-        "/postjob текст — вакансия\n"
+        "🚀 V16 SMART JOB PLATFORM\n\n"
+        "/postjob текст — создать вакансию\n"
         "/jobs — список\n"
-        "/apply ID — отклик\n"
+        "/jobs Киев — поиск по городу\n"
+        "/projob текст — PRO вакансия"
     )
-
-async def candidate(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    set_role(update.effective_user.id, "candidate")
-    await update.message.reply_text("👷 Вы кандидат")
-
-async def employer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    set_role(update.effective_user.id, "employer")
-    await update.message.reply_text("🏢 Вы работодатель")
 
 async def postjob(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = " ".join(context.args)
     employer_id = update.effective_user.id
 
-    cur.execute("INSERT INTO jobs (employer_id, text) VALUES (?, ?)", (employer_id, text))
+    formatted = ai_format_job(text)
+
+    cur.execute(
+        "INSERT INTO jobs (employer_id, text, pro) VALUES (?, ?, 0)",
+        (employer_id, formatted)
+    )
     conn.commit()
 
-    await update.message.reply_text("🏢 вакансия создана")
+    await update.message.reply_text("🏢 вакансия добавлена")
+
+async def projob(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = " ".join(context.args)
+    employer_id = update.effective_user.id
+
+    formatted = ai_format_job(text)
+
+    cur.execute(
+        "INSERT INTO jobs (employer_id, text, pro) VALUES (?, ?, 1)",
+        (employer_id, formatted)
+    )
+    conn.commit()
+
+    await update.message.reply_text("💎 PRO вакансия добавлена")
 
 async def jobs(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    cur.execute("SELECT id, text FROM jobs ORDER BY id DESC")
+    args = context.args
+
+    if args:
+        city = args[0]
+        cur.execute("SELECT id, text, pro FROM jobs WHERE text LIKE ?", (f"%{city}%",))
+    else:
+        cur.execute("SELECT id, text, pro FROM jobs ORDER BY id DESC")
+
     rows = cur.fetchall()
 
-    for r in rows[:10]:
-        await update.message.reply_text(f"ID {r[0]}:\n💼 {r[1]}")
-
-# ================= APPLY + CHAT ROOM =================
-
-async def apply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    candidate_id = update.effective_user.id
-    job_id = context.args[0]
-
-    employer_id = get_employer(job_id)
-
-    if not employer_id:
-        await update.message.reply_text("❌ вакансия не найдена")
+    if not rows:
+        await update.message.reply_text("📭 вакансий нет")
         return
 
-    room_id = f"{job_id}_{candidate_id}"
+    for r in rows[:10]:
+        tag = "💎 PRO" if r[2] == 1 else "💼"
+        await update.message.reply_text(f"{tag} ID {r[0]}\n{r[1]}")
 
-    cur.execute(
-        "INSERT INTO applications (job_id, candidate_id) VALUES (?, ?)",
-        (job_id, candidate_id)
-    )
-    conn.commit()
-
-    await update.message.reply_text("📩 отклик отправлен")
-
-    await context.bot.send_message(
-        employer_id,
-        f"📨 Новый отклик на вакансию {job_id}\n"
-        f"💬 начат чат (room {room_id})"
-    )
-
-# ================= CHAT =================
+# ================= SIMPLE CHAT =================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
     text = update.message.text
 
-    cur.execute("""
-        SELECT job_id, candidate_id FROM applications
-        WHERE candidate_id=? OR job_id IN (
-            SELECT id FROM jobs WHERE employer_id=?
-        )
-        ORDER BY id DESC LIMIT 1
-    """, (user_id, user_id))
-
-    row = cur.fetchone()
-
-    if not row:
-        await update.message.reply_text("❌ нет активного чата")
-        return
-
-    job_id, candidate_id = row
-    room_id = f"{job_id}_{candidate_id}"
-
-    cur.execute(
-        "INSERT INTO chats (room_id, sender_id, text) VALUES (?, ?, ?)",
-        (room_id, user_id, text)
-    )
-    conn.commit()
-
-    employer_id = get_employer(job_id)
-
-    # пересылаем сообщение второй стороне
-    if user_id == employer_id:
-        target = candidate_id
+    # простой AI-ответ (без API)
+    if "зарплата" in text.lower():
+        await update.message.reply_text("💰 зарплата обсуждается с работодателем")
+    elif "работа" in text.lower():
+        await update.message.reply_text("📌 используйте /jobs для поиска")
     else:
-        target = employer_id
-
-    await context.bot.send_message(
-        target,
-        f"💬 сообщение:\n{text}"
-    )
+        await update.message.reply_text("💬 сообщение отправлено")
 
 # ================= MAIN =================
 
@@ -186,18 +139,15 @@ def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("candidate", candidate))
-    app.add_handler(CommandHandler("employer", employer))
     app.add_handler(CommandHandler("postjob", postjob))
+    app.add_handler(CommandHandler("projob", projob))
     app.add_handler(CommandHandler("jobs", jobs))
-    app.add_handler(CommandHandler("apply", apply))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    print("✅ V15 RUNNING REAL CHAT")
+    print("✅ V16 RUNNING")
 
     app.run_polling()
 
 if __name__ == "__main__":
     main()
-  
