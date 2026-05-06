@@ -1,4 +1,5 @@
 import os
+import json
 import logging
 
 import httpx
@@ -23,8 +24,26 @@ load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 
+SEEN_FILE = "seen.json"
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# ---------------- MEMORY ----------------
+
+def load_seen():
+    if not os.path.exists(SEEN_FILE):
+        return set()
+    try:
+        with open(SEEN_FILE, "r") as f:
+            return set(json.load(f))
+    except:
+        return set()
+
+
+def save_seen(seen):
+    with open(SEEN_FILE, "w") as f:
+        json.dump(list(seen), f)
 
 # ---------------- HTTP ----------------
 
@@ -51,7 +70,6 @@ async def parse_work():
 
     jobs = []
 
-    # основной способ
     cards = soup.select("div.job-link")
 
     for c in cards:
@@ -62,7 +80,6 @@ async def parse_work():
                 "link": "https://www.work.ua" + a.get("href")
             })
 
-    # fallback (если сайт меняется)
     if not jobs:
         links = soup.select("a[href*='/jobs/']")
 
@@ -90,21 +107,50 @@ async def post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print("📩 /post")
 
     jobs = await parse_work()
+    seen = load_seen()
 
-    await update.message.reply_text(f"📊 найдено: {len(jobs)}")
+    new_jobs = []
 
-    if not jobs:
-        await update.message.reply_text("❌ вакансий нет")
+    for j in jobs:
+        if j["link"] in seen:
+            continue
+        new_jobs.append(j)
+        seen.add(j["link"])
+
+    save_seen(seen)
+
+    await update.message.reply_text(f"📊 новых: {len(new_jobs)}")
+
+    if not new_jobs:
+        await update.message.reply_text("❌ новых вакансий нет")
         return
 
-    for j in jobs[:3]:
+    for j in new_jobs[:3]:
         text = f"💼 {j['title']}\n🔗 {j['link']}"
 
-        # отправка в канал
         await context.bot.send_message(
             chat_id=CHANNEL_ID,
             text=text
         )
+
+async def auto_post(context: ContextTypes.DEFAULT_TYPE):
+    jobs = await parse_work()
+    seen = load_seen()
+
+    for j in jobs:
+        if j["link"] in seen:
+            continue
+
+        seen.add(j["link"])
+
+        text = f"💼 {j['title']}\n🔗 {j['link']}"
+
+        await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=text
+        )
+
+    save_seen(seen)
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print("📩 TEXT:", update.message.text)
@@ -127,6 +173,9 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("post", post))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+
+    # 🔥 AUTO POSTING каждые 5 минут
+    app.job_queue.run_repeating(auto_post, interval=300, first=10)
 
     print("✅ BOT READY")
 
