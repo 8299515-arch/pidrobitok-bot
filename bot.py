@@ -13,14 +13,14 @@ from telegram.ext import (
 )
 from telegram.request import HTTPXRequest
 
-print("🚀 V20 START")
+print("🚀 V20 FIX START")
 
 # ================= ENV =================
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 if not TOKEN:
-    raise ValueError("❌ TOKEN not found")
+    raise ValueError("❌ TELEGRAM_TOKEN not found")
 
 # ================= DB =================
 conn = sqlite3.connect("v20.db", check_same_thread=False)
@@ -58,7 +58,6 @@ conn.commit()
 # ================= STATE =================
 user_state = {}
 user_job_index = {}
-user_filters = {}
 
 # ================= HELPERS =================
 def set_role(uid, role):
@@ -70,7 +69,7 @@ def get_role(uid):
     row = cur.fetchone()
     return row[0] if row else None
 
-# ================= START MENU =================
+# ================= START =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("👷 Ищу работу", callback_data="candidate")],
@@ -78,7 +77,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
 
     await update.message.reply_text(
-        "🚀 V20 JOB PLATFORM",
+        "🚀 V20 FIX JOB PLATFORM",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -94,13 +93,11 @@ async def role_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_job_index[uid] = 0
 
         keyboard = [
-            [InlineKeyboardButton("📋 Вакансии", callback_data="jobs")],
-            [InlineKeyboardButton("🔍 Поиск", callback_data="search")],
-            [InlineKeyboardButton("💰 Фильтр зарплаты", callback_data="filter")]
+            [InlineKeyboardButton("📋 Вакансии", callback_data="jobs")]
         ]
 
         await q.edit_message_text(
-            "👷 Меню кандидата",
+            "👷 Вы кандидат",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
@@ -170,7 +167,7 @@ async def show_job(query, uid):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# ================= NEXT =================
+# ================= NEXT JOB =================
 async def next_job(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -192,6 +189,7 @@ async def apply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     emp = cur.fetchone()
 
     if not emp:
+        await q.edit_message_text("❌ ошибка")
         return
 
     employer_id = emp[0]
@@ -212,6 +210,7 @@ def main():
 
     app = ApplicationBuilder().token(TOKEN).request(request).build()
 
+    # ================= HANDLERS (ИСПРАВЛЕНО) =================
     app.add_handler(CommandHandler("start", start))
 
     app.add_handler(CallbackQueryHandler(role_handler, pattern="candidate|employer"))
@@ -221,7 +220,7 @@ def main():
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    print("✅ V20 RUNNING")
+    print("✅ V20 FIX RUNNING")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
