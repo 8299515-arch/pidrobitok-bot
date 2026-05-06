@@ -1,6 +1,6 @@
-import os
-import sqlite3
-from dotenv import load_dotenv
+import asyncio
+from telegram import Bot
+from telegram.request import HTTPXRequest
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -205,6 +205,22 @@ async def post_job(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     print("🔒 SAFE START INIT")
 
+    asyncio.run(clean())
+
+    request = HTTPXRequest(connect_timeout=10, read_timeout=30)
+
+    app = ApplicationBuilder().token(TOKEN).request(request).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(role_handler, pattern="role_"))
+    app.add_handler(CallbackQueryHandler(show_jobs, pattern="jobs"))
+    app.add_handler(CallbackQueryHandler(apply, pattern="apply_"))
+
+    # правильное разделение
+    app.add_handler(MessageHandler(filters.Regex("^(🏢|👷)"), post_job))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    app.run_polling(drop_pending_updates=True)
     # ================= CLEAN OLD STATE =================
 
     async def clean():
