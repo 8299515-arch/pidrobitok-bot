@@ -1,9 +1,8 @@
 import os
 import sys
 import time
-import psutil
-import logging
 import sqlite3
+import logging
 from dotenv import load_dotenv
 
 from telegram import Update
@@ -19,7 +18,7 @@ from telegram.ext import (
 from telegram.request import HTTPXRequest
 from telegram.error import TimedOut, NetworkError, Conflict
 
-print("🚀 V13.5 PRO STARTING")
+print("🚀 V13.5 LIGHT STARTED")
 
 # ================= LOGGING =================
 
@@ -28,29 +27,18 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-# ================= SAFE LOCK =================
+# ================= SIMPLE LOCK (NO PSUTIL) =================
 
 LOCK_FILE = "bot.lock"
 
-def is_process_running(pid):
-    return psutil.pid_exists(pid)
-
 if os.path.exists(LOCK_FILE):
-    try:
-        with open(LOCK_FILE, "r") as f:
-            old_pid = int(f.read().strip())
-
-        if is_process_running(old_pid):
-            print("⛔ BOT ALREADY RUNNING")
-            sys.exit()
-
-    except:
-        print("🧹 BAD LOCK FIXED")
+    print("⛔ BOT LOCK DETECTED (maybe already running)")
+    sys.exit()
 
 with open(LOCK_FILE, "w") as f:
-    f.write(str(os.getpid()))
+    f.write("running")
 
-print("🔒 SAFE LOCK ACTIVE")
+print("🔒 LOCK CREATED")
 
 import atexit
 
@@ -80,33 +68,33 @@ text TEXT
 
 conn.commit()
 
-# ================= HANDLERS =================
+# ================= COMMANDS =================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🚀 V13.5 PRO BOT WORKING")
+    await update.message.reply_text("🚀 V13.5 LIGHT BOT ACTIVE")
+
+async def postjob(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = " ".join(context.args)
+
+    if not text:
+        await update.message.reply_text("❌ empty")
+        return
+
+    cur.execute("INSERT INTO jobs (text) VALUES (?)", (text,))
+    conn.commit()
+
+    await update.message.reply_text("🏢 added")
 
 async def jobs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cur.execute("SELECT text FROM jobs ORDER BY id DESC")
     rows = cur.fetchall()
 
     if not rows:
-        await update.message.reply_text("📭 Нет вакансий")
+        await update.message.reply_text("📭 no jobs")
         return
 
     for r in rows[:10]:
         await update.message.reply_text(f"💼 {r[0]}")
-
-async def postjob(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = " ".join(context.args)
-
-    if not text:
-        await update.message.reply_text("❌ пусто")
-        return
-
-    cur.execute("INSERT INTO jobs (text) VALUES (?)", (text,))
-    conn.commit()
-
-    await update.message.reply_text("🏢 добавлено")
 
 # ================= ERROR HANDLER =================
 
@@ -129,22 +117,21 @@ def main():
 
     app.add_error_handler(error_handler)
 
-    # ================= SAFE RETRY LOOP =================
-
     while True:
         try:
-            print("✅ BOT RUNNING (PRO MODE)")
+            print("✅ BOT RUNNING LIGHT MODE")
+
             app.run_polling(
                 drop_pending_updates=True,
                 allowed_updates=Update.ALL_TYPES
             )
 
         except (TimedOut, NetworkError, Conflict) as e:
-            print(f"⚠️ RESTARTING BOT DUE TO ERROR: {e}")
+            print(f"⚠️ restart due to: {e}")
             time.sleep(3)
 
         except Exception as e:
-            print(f"🔥 FATAL ERROR: {e}")
+            print(f"🔥 fatal error: {e}")
             time.sleep(5)
 
 # ================= START =================
