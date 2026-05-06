@@ -27,19 +27,19 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ---------------- HTTP ----------------
+
 async def fetch(url):
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                      "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language": "ru-RU,ru;q=0.9,uk;q=0.8,en-US;q=0.7,en;q=0.6"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept-Language": "ru-RU,ru;q=0.9,uk;q=0.8,en-US;q=0.7"
     }
 
     async with httpx.AsyncClient(timeout=20, headers=headers) as client:
         r = await client.get(url)
         return r.text if r.status_code == 200 else None
 
-
 # ---------------- PARSER ----------------
+
 async def parse_work():
     url = "https://www.work.ua/jobs-kyiv-%D1%80%D1%96%D0%B7%D0%BD%D0%BE%D1%80%D0%BE%D0%B1%D0%BE%D1%87%D0%B8%D0%B9/"
     html = await fetch(url)
@@ -87,7 +87,14 @@ async def post(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     for j in jobs[:3]:
         text = f"💼 {j['title']}\n🔗 {j['link']}"
-        await update.message.reply_text(text)
+
+        # 🔥 ОТПРАВКА В КАНАЛ
+        await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=text
+        )
+
+# ---------------- TEXT ----------------
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print("📩 TEXT:", update.message.text)
@@ -99,6 +106,10 @@ def main():
 
     if not TELEGRAM_TOKEN:
         print("❌ NO TOKEN")
+        return
+
+    if not CHANNEL_ID:
+        print("❌ NO CHANNEL_ID")
         return
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
@@ -115,5 +126,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-   
-   
