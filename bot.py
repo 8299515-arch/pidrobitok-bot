@@ -39,7 +39,6 @@ async def fetch(url):
         return r.text if r.status_code == 200 else None
 
 # ---------------- PARSER ----------------
-
 async def parse_work():
     url = "https://www.work.ua/jobs-kyiv-%D1%80%D1%96%D0%B7%D0%BD%D0%BE%D1%80%D0%BE%D0%B1%D0%BE%D1%87%D0%B8%D0%B9/"
     html = await fetch(url)
@@ -51,48 +50,34 @@ async def parse_work():
 
     jobs = []
 
+    # 🔥 способ 1
     cards = soup.select("div.job-link")
 
     for c in cards:
         a = c.find("a")
-        if not a:
-            continue
+        if a:
+            jobs.append({
+                "title": a.get_text(strip=True),
+                "link": "https://www.work.ua" + a.get("href")
+            })
 
-        title = a.get_text(strip=True)
-        link = "https://www.work.ua" + a.get("href")
+    # 🔥 если пусто — fallback
+    if not jobs:
+        links = soup.select("a[href*='/jobs/']")
 
-        jobs.append({
-            "title": title,
-            "link": link
-        })
+        for a in links:
+            title = a.get_text(strip=True)
+            href = a.get("href")
+
+            if not title or len(title) < 10:
+                continue
+
+            jobs.append({
+                "title": title,
+                "link": "https://www.work.ua" + href
+            })
 
     return jobs[:10]
-
-# ---------------- HANDLERS ----------------
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("📩 /start")
-    await update.message.reply_text("🤖 Бот работает")
-
-async def post(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("📩 /post")
-
-    jobs = await parse_work()
-
-    await update.message.reply_text(f"📊 найдено: {len(jobs)}")
-
-    if not jobs:
-        await update.message.reply_text("❌ вакансий нет")
-        return
-
-    for j in jobs[:3]:
-        text = f"💼 {j['title']}\n🔗 {j['link']}"
-
-        # 🔥 ОТПРАВКА В КАНАЛ
-        await context.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=text
-        )
 
 # ---------------- TEXT ----------------
 
