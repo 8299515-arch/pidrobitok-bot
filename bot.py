@@ -164,22 +164,30 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📨 Сообщение отправлено")
 
 # ---------------- MAIN ----------------
+from telegram.request import HTTPXRequest
+import os
 
 def main():
+    print("🚀 BOT START")
+
+    request = HTTPXRequest(
+        connect_timeout=10,
+        read_timeout=30
+    )
+
+    app = ApplicationBuilder().token(TOKEN).request(request).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("jobs", jobs))
+    app.add_handler(CommandHandler("postjob", postjob))
+
+    app.add_handler(CallbackQueryHandler(callback))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+
+    print("✅ BOT RUNNING SAFE MODE")
+
     try:
-        app = ApplicationBuilder().token(TOKEN).build()
-
-        app.add_handler(CommandHandler("start", start))
-        app.add_handler(CommandHandler("jobs", jobs))
-        app.add_handler(CommandHandler("postjob", postjob))
-
-        app.add_handler(CallbackQueryHandler(callback))
-        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-
-        print("✅ BOT RUNNING SAFE MODE")
-
         app.run_polling()
-
     finally:
         if os.path.exists(LOCK_FILE):
             os.remove(LOCK_FILE)
