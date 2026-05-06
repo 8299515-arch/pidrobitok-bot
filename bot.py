@@ -2,143 +2,154 @@ import os
 import sqlite3
 from dotenv import load_dotenv
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder,
+    Application,
     CommandHandler,
-    CallbackQueryHandler,
     MessageHandler,
     ContextTypes,
-    filters
+    filters,
 )
 
-print("🚀 V2 JOB BOT START")
+from google import genai
 
-# ================= ENV =================
+# ======================
+# ENV
+# ======================
 load_dotenv()
-TOKEN = os.getenv("TELEGRAM_TOKEN")
 
-if not TOKEN:
-    raise ValueError("❌ TOKEN NOT FOUND")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
-# ================= DB =================
-conn = sqlite3.connect("jobs.db", check_same_thread=False)
+# ======================
+# AI CLIENT
+# ======================
+client = genai.Client(api_key=GOOGLE_API_KEY)
+
+def ask_ai(text: str):
+    response = client.models.generate_content(
+        model="gemini-1.5-flash",
+        contents=text
+    )
+    return response.text
+
+# ======================
+# DB (простая база вакансий)
+# ======================
+conn = sqlite3.connect("db.sqlite", check_same_thread=False)
 cur = conn.cursor()
 
 cur.execute("""
 CREATE TABLE IF NOT EXISTS jobs (
-id INTEGER PRIMARY KEY AUTOINCREMENT,
-employer_id INTEGER,
-title TEXT,
-salary_from INTEGER,
-salary_to INTEGER,
-description TEXT
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT,
+    salary INTEGER
 )
 """)
 
-conn.commit()
+# тестовые данные (если пусто)
+cur.execute("SELECT COUNT(*) FROM jobs")
+if cur.fetchone()[0] == 0:
+    cur.executemany("""
+        INSERT INTO jobs (title, salary)
+        VALUES (?, ?)
+    """, [
+        ("Python Developer", 1500),
+        ("Django Developer", 2000),
+        ("Frontend React", 1800),
+        ("QA Engineer", 1200),
+        ("DevOps Engineer", 2500),
+    ])
+    conn.commit()
 
-# ================= STATE =================
-user_state = {}
+# ======================
+# KEYBOARD
+# ======================
+keyboard = ReplyKeyboardMarkup(
+    [
+        ["📌 Вакансии", "💰 Вакансии 1500+"],
+        ["🤖 AI помощник"]
+    ],
+    resize_keyboard=True
+)
 
-# ================= START =================
+# ======================
+# START
+# ======================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("🏢 Добавить вакансию", callback_data="add_job")],
-        [InlineKeyboardButton("📋 Вакансии", callback_data="list_jobs")]
-    ]
-
     await update.message.reply_text(
-        "💼 JOB BOT V2",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        "👋 Привет! Я Job Bot V3\n\n"
+        "📌 Вакансии\n"
+        "💰 Фильтр зарплат\n"
+        "🤖 AI помощник",
+        reply_markup=keyboard
     )
 
-# ================= BUTTONS =================
-async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+# ======================
+# VACANCIES
+# ======================
+async def show_jobs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cur.execute("SELECT title, salary FROM jobs")
+    jobs = cur.fetchall()
 
-    user_id = query.from_user.id
+    text = "📌 Все вакансии:\n\n"
+    for j in jobs:
+        text += f"• {j[0]} — ${j[1]}\n"
 
-    # ➕ ДОБАВИТЬ ВАКАНСИЮ
-    if query.data == "add_job":
-        user_state[user_id] = "create_job"
-        await query.edit_message_text(
-            "🏢 Введите вакансию:\nНазвание | от | до | описание"
-        )
+    await update.message.reply_text(text)
 
-    # 📋 СПИСОК ВАКАНСИЙ
-    elif query.data == "list_jobs":
-        cur.execute("""
-        SELECT id, title, salary_from, salary_to, description
-        FROM jobs
-        ORDER BY id DESC
-        LIMIT 5
-        """)
-        jobs = cur.fetchall()
+# ======================
+# FILTER 1500+
+# ======================
+async def jobs_1500(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cur.execute("SELECT title, salary FROM jobs WHERE salary >= 1500")
+    jobs = cur.fetchall()
 
-        if not jobs:
-            await query.edit_message_text("📭 Вакансий нет")
-            return
+    text = "💰 Вакансии от $1500:\n\n"
+    for j in jobs:
+        text += f"• {j[0]} — ${j[1]}\n"
 
-        text = "📋 ВАКАНСИИ:\n\n"
+    await update.message.reply_text(text)
 
-        keyboard = []
+# ======================
+# AI CHAT
+# ======================
+async def ai_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_text = update.message.text
 
-        for job in jobs:
-            jid, title, s1, s2, desc = job
+    answer = ask_ai(user_text)
 
-            text += f"🏢 {title}\n💰 {s1}-{s2}\n\n"
+    await update.message.reply_text(answer)
 
-            keyboard.append([
-                InlineKeyboardButton(f"📩 Отклик на {title}", callback_data=f"apply_{jid}")
-            ])
-
-        await query.edit_message_text(
-            text,
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-
-    # 📩 ОТКЛИК (ПОКА ПРОСТО)
-    elif query.data.startswith("apply_"):
-        await query.edit_message_text("✅ Отклик отправлен (чат будет в V3)")
-
-# ================= MESSAGE =================
-async def message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+# ======================
+# ROUTER
+# ======================
+async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
 
-    # СОЗДАНИЕ ВАКАНСИИ
-    if user_state.get(user_id) == "create_job":
-        try:
-            title, s1, s2, desc = [x.strip() for x in text.split("|")]
+    if text == "📌 Вакансии":
+        await show_jobs(update, context)
 
-            cur.execute("""
-                INSERT INTO jobs (employer_id, title, salary_from, salary_to, description)
-                VALUES (?, ?, ?, ?, ?)
-            """, (user_id, title, int(s1), int(s2), desc))
+    elif text == "💰 Вакансии 1500+":
+        await jobs_1500(update, context)
 
-            conn.commit()
-            user_state.pop(user_id)
+    elif text == "🤖 AI помощник":
+        await update.message.reply_text("Напиши вопрос 👇")
 
-            await update.message.reply_text("🏢 Вакансия добавлена")
+    else:
+        await ai_handler(update, context)
 
-        except:
-            await update.message.reply_text(
-                "❌ Ошибка формата\n\nПример:\nPython Dev | 1000 | 2000 | Django опыт"
-            )
-
-# ================= MAIN =================
+# ======================
+# MAIN
+# ======================
 def main():
-    app = ApplicationBuilder().token(TOKEN).build()
+    app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(buttons))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, router))
 
-    print("✅ V2 JOB BOT RUNNING")
-
-    app.run_polling(drop_pending_updates=True)
+    print("🚀 V3 Bot running...")
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
