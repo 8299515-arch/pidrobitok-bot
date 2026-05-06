@@ -1,44 +1,18 @@
 import os
-import sys
-import time
 import sqlite3
 from dotenv import load_dotenv
 
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
+    CallbackQueryHandler,
     MessageHandler,
     ContextTypes,
     filters
 )
 
-from telegram.request import HTTPXRequest
-from telegram.error import TimedOut, NetworkError, Conflict
-
-print("🚀 V16 CLEAN PRODUCTION STARTED")
-
-# ================= SIMPLE LOCK =================
-
-LOCK_FILE = "bot.lock"
-
-if os.path.exists(LOCK_FILE):
-    print("⛔ BOT ALREADY RUNNING")
-    sys.exit()
-
-with open(LOCK_FILE, "w") as f:
-    f.write("running")
-
-print("🔒 LOCK CREATED")
-
-import atexit
-
-def cleanup():
-    if os.path.exists(LOCK_FILE):
-        os.remove(LOCK_FILE)
-        print("🧹 LOCK REMOVED")
-
-atexit.register(cleanup)
+print("🚀 V17 STARTED")
 
 # ================= ENV =================
 
@@ -47,132 +21,203 @@ TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 # ================= DB =================
 
-conn = sqlite3.connect("v16.db", check_same_thread=False)
+conn = sqlite3.connect("v17.db", check_same_thread=False)
 cur = conn.cursor()
+
+cur.execute("""
+CREATE TABLE IF NOT EXISTS users (
+id INTEGER PRIMARY KEY,
+role TEXT
+)
+""")
 
 cur.execute("""
 CREATE TABLE IF NOT EXISTS jobs (
 id INTEGER PRIMARY KEY AUTOINCREMENT,
-text TEXT,
-pro INTEGER DEFAULT 0
+employer_id INTEGER,
+text TEXT
+)
+""")
+
+cur.execute("""
+CREATE TABLE IF NOT EXISTS chats (
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+job_id INTEGER,
+candidate_id INTEGER,
+employer_id INTEGER
 )
 """)
 
 conn.commit()
 
-# ================= AI FORMAT =================
+# ================= HELPERS =================
 
-def format_job(text, pro=False):
-    tag = "💎 PRO" if pro else "💼"
-    return f"""{tag} Вакансия
+def set_role(user_id, role):
+    cur.execute("INSERT OR REPLACE INTO users (id, role) VALUES (?, ?)", (user_id, role))
+    conn.commit()
 
-📌 {text}
+def get_role(user_id):
+    cur.execute("SELECT role FROM users WHERE id=?", (user_id,))
+    row = cur.fetchone()
+    return row[0] if row else None
 
-💡 Условия: стабильная работа
-🤝 Требования: ответственность
-📍 Формат: Киев / удалённо
-"""
-
-# ================= COMMANDS =================
+# ================= START =================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("👷 Ищу работу", callback_data="role_candidate")],
+        [InlineKeyboardButton("🏢 Работодатель", callback_data="role_employer")]
+    ]
     await update.message.reply_text(
-        "🚀 JOB BOT\n\n"
-        "/postjob текст — вакансия\n"
-        "/projob текст — PRO вакансия\n"
-        "/jobs — список\n"
+        "🚀 JOB PLATFORM\n\nВыберите роль:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-async def postjob(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = " ".join(context.args)
+# ================= ROLE =================
 
-    if not text:
-        await update.message.reply_text("❌ пусто")
+async def role_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    user_id = query.from_user.id
+
+    if query.data == "role_candidate":
+        set_role(user_id, "candidate")
+
+        keyboard = [
+            [InlineKeyboardButton("📋 Вакансии", callback_data="jobs")]
+        ]
+
+        await query.edit_message_text(
+            "👷 Вы кандидат",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    elif query.data == "role_employer":
+        set_role(user_id, "employer")
+
+        await query.edit_message_text(
+            "🏢 Вы работодатель\n\nНапишите вакансию текстом"
+        )
+
+# ================= JOBS =================
+
+async def show_jobs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    cur.execute("SELECT id, text FROM jobs ORDER BY id DESC LIMIT 1")
+    job = cur.fetchone()
+
+    if not job:
+        await query.edit_message_text("📭 вакансий нет")
         return
 
-    cur.execute("INSERT INTO jobs (text, pro) VALUES (?, 0)", (text,))
+    job_id, text = job
+
+    keyboard = [
+        [InlineKeyboardButton("📩 Откликнуться", callback_data=f"apply_{job_id}")]
+    ]
+
+    await query.edit_message_text(
+        f"💼 {text}",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+# ================= APPLY =================
+
+async def apply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    user_id = query.from_user.id
+    job_id = int(query.data.split("_")[1])
+
+    cur.execute("SELECT employer_id FROM jobs WHERE id=?", (job_id,))
+    employer = cur.fetchone()
+
+    if not employer:
+        await query.edit_message_text("❌ ошибка")
+        return
+
+    employer_id = employer[0]
+
+    cur.execute(
+        "INSERT INTO chats (job_id, candidate_id, employer_id) VALUES (?, ?, ?)",
+        (job_id, user_id, employer_id)
+    )
     conn.commit()
 
-    await update.message.reply_text("🏢 добавлено")
+    await query.edit_message_text("✅ Отклик отправлен, чат открыт")
 
-async def projob(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = " ".join(context.args)
+    await context.bot.send_message(
+        employer_id,
+        "📨 Новый кандидат написал вам"
+    )
 
-    if not text:
-        await update.message.reply_text("❌ пусто")
-        return
-
-    cur.execute("INSERT INTO jobs (text, pro) VALUES (?, 1)", (text,))
-    conn.commit()
-
-    await update.message.reply_text("💎 PRO добавлено")
-
-async def jobs(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    cur.execute("SELECT id, text, pro FROM jobs ORDER BY pro DESC, id DESC")
-    rows = cur.fetchall()
-
-    if not rows:
-        await update.message.reply_text("📭 вакансий нет")
-        return
-
-    for r in rows[:10]:
-        msg = format_job(r[1], r[2] == 1)
-        await update.message.reply_text(f"ID {r[0]}\n{msg}")
-
-# ================= SIMPLE AI CHAT =================
+# ================= CHAT =================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.lower()
+    user_id = update.effective_user.id
+    text = update.message.text
 
-    if "работа" in text:
-        await update.message.reply_text("📌 смотри /jobs")
-    elif "зарплата" in text:
-        await update.message.reply_text("💰 обсуждается с работодателем")
-    else:
-        await update.message.reply_text("💬 сообщение принято")
+    cur.execute("""
+        SELECT job_id, candidate_id, employer_id FROM chats
+        WHERE candidate_id=? OR employer_id=?
+        ORDER BY id DESC LIMIT 1
+    """, (user_id, user_id))
 
-# ================= ERROR HANDLER =================
+    chat = cur.fetchone()
 
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    print(f"⚠️ ERROR: {context.error}")
+    if not chat:
+        await update.message.reply_text("❌ нет активного чата")
+        return
+
+    job_id, candidate_id, employer_id = chat
+
+    target = employer_id if user_id == candidate_id else candidate_id
+
+    await context.bot.send_message(
+        target,
+        f"💬 {text}"
+    )
+
+# ================= POST JOB =================
+
+async def post_job(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    role = get_role(user_id)
+
+    if role != "employer":
+        return
+
+    text = update.message.text
+
+    cur.execute(
+        "INSERT INTO jobs (employer_id, text) VALUES (?, ?)",
+        (user_id, text)
+    )
+    conn.commit()
+
+    await update.message.reply_text("🏢 Вакансия добавлена")
 
 # ================= MAIN =================
 
 def main():
-    request = HTTPXRequest(
-        connect_timeout=10,
-        read_timeout=30
-    )
-
-    app = ApplicationBuilder().token(TOKEN).request(request).build()
+    app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("postjob", postjob))
-    app.add_handler(CommandHandler("projob", projob))
-    app.add_handler(CommandHandler("jobs", jobs))
 
+    app.add_handler(CallbackQueryHandler(role_handler, pattern="role_"))
+    app.add_handler(CallbackQueryHandler(show_jobs, pattern="jobs"))
+    app.add_handler(CallbackQueryHandler(apply, pattern="apply_"))
+
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, post_job))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    app.add_error_handler(error_handler)
+    print("✅ V17 RUNNING")
 
-    while True:
-        try:
-            print("✅ BOT RUNNING CLEAN MODE")
-
-            app.run_polling(
-                drop_pending_updates=True,
-                allowed_updates=Update.ALL_TYPES
-            )
-
-        except (TimedOut, NetworkError, Conflict) as e:
-            print(f"⚠️ RESTART: {e}")
-            time.sleep(3)
-
-        except Exception as e:
-            print(f"🔥 FATAL: {e}")
-            time.sleep(5)
-
-# ================= START =================
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
