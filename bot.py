@@ -4,7 +4,7 @@ import httpx
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
-import google.generativeai as genai
+pip install google-genai
 
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
@@ -19,8 +19,8 @@ from telegram.ext import (
 # ENV
 # ======================
 load_dotenv()
-print("TOKEN:", BOT_TOKEN)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+print("TOKEN:", BOT_TOKEN)
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 genai.configure(api_key=GOOGLE_API_KEY)
