@@ -1,9 +1,8 @@
 import os
-import asyncio
 import sqlite3
 from dotenv import load_dotenv
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -14,17 +13,17 @@ from telegram.ext import (
 )
 from telegram.request import HTTPXRequest
 
-print("🚀 BOT STARTING V17 CLEAN")
+print("🚀 V20 START")
 
 # ================= ENV =================
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 if not TOKEN:
-    raise ValueError("❌ TELEGRAM_TOKEN not found in .env")
+    raise ValueError("❌ TOKEN not found")
 
 # ================= DB =================
-conn = sqlite3.connect("v17.db", check_same_thread=False)
+conn = sqlite3.connect("v20.db", check_same_thread=False)
 cur = conn.cursor()
 
 cur.execute("""
@@ -38,6 +37,9 @@ cur.execute("""
 CREATE TABLE IF NOT EXISTS jobs (
 id INTEGER PRIMARY KEY AUTOINCREMENT,
 employer_id INTEGER,
+title TEXT,
+salary_from INTEGER,
+salary_to INTEGER,
 text TEXT
 )
 """)
@@ -53,179 +55,175 @@ employer_id INTEGER
 
 conn.commit()
 
+# ================= STATE =================
+user_state = {}
+user_job_index = {}
+user_filters = {}
+
 # ================= HELPERS =================
-def set_role(user_id, role):
-    cur.execute("INSERT OR REPLACE INTO users (id, role) VALUES (?, ?)", (user_id, role))
+def set_role(uid, role):
+    cur.execute("INSERT OR REPLACE INTO users (id, role) VALUES (?, ?)", (uid, role))
     conn.commit()
 
-def get_role(user_id):
-    cur.execute("SELECT role FROM users WHERE id=?", (user_id,))
+def get_role(uid):
+    cur.execute("SELECT role FROM users WHERE id=?", (uid,))
     row = cur.fetchone()
     return row[0] if row else None
 
-# ================= START =================
+# ================= START MENU =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("👷 Ищу работу", callback_data="role_candidate")],
-        [InlineKeyboardButton("🏢 Работодатель", callback_data="role_employer")]
+        [InlineKeyboardButton("👷 Ищу работу", callback_data="candidate")],
+        [InlineKeyboardButton("🏢 Работодатель", callback_data="employer")]
     ]
 
     await update.message.reply_text(
-        "🚀 JOB PLATFORM\n\nВыберите роль:",
+        "🚀 V20 JOB PLATFORM",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 # ================= ROLE =================
 async def role_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+    q = update.callback_query
+    await q.answer()
 
-    user_id = query.from_user.id
+    uid = q.from_user.id
 
-    if query.data == "role_candidate":
-        set_role(user_id, "candidate")
+    if q.data == "candidate":
+        set_role(uid, "candidate")
+        user_job_index[uid] = 0
 
         keyboard = [
-            [InlineKeyboardButton("📋 Вакансии", callback_data="jobs")]
+            [InlineKeyboardButton("📋 Вакансии", callback_data="jobs")],
+            [InlineKeyboardButton("🔍 Поиск", callback_data="search")],
+            [InlineKeyboardButton("💰 Фильтр зарплаты", callback_data="filter")]
         ]
 
-        await query.edit_message_text(
-            "👷 Вы кандидат",
+        await q.edit_message_text(
+            "👷 Меню кандидата",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
-    elif query.data == "role_employer":
-        set_role(user_id, "employer")
-        await query.edit_message_text("🏢 Напишите вакансию текстом")
+    elif q.data == "employer":
+        set_role(uid, "employer")
+        user_state[uid] = "create_job"
 
-# ================= JOBS =================
-async def show_jobs(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+        await q.edit_message_text(
+            "🏢 Введите вакансию:\nНазвание | от | до | описание"
+        )
 
-    cur.execute("SELECT id, text FROM jobs ORDER BY id DESC LIMIT 1")
-    job = cur.fetchone()
+# ================= CREATE JOB =================
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    text = update.message.text
 
-    if not job:
+    if user_state.get(uid) == "create_job":
+        try:
+            title, s_from, s_to, desc = [x.strip() for x in text.split("|")]
+
+            cur.execute("""
+                INSERT INTO jobs (employer_id, title, salary_from, salary_to, text)
+                VALUES (?, ?, ?, ?, ?)
+            """, (uid, title, int(s_from), int(s_to), desc))
+
+            conn.commit()
+            user_state.pop(uid)
+
+            await update.message.reply_text("🏢 Вакансия добавлена")
+
+        except:
+            await update.message.reply_text("❌ Ошибка формата")
+        return
+
+# ================= JOB LIST =================
+async def jobs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+
+    user_job_index[q.from_user.id] = 0
+    await show_job(q, q.from_user.id)
+
+# ================= SHOW JOB =================
+async def show_job(query, uid):
+    cur.execute("SELECT id, title, salary_from, salary_to, text FROM jobs ORDER BY id DESC")
+    jobs = cur.fetchall()
+
+    if not jobs:
         await query.edit_message_text("📭 вакансий нет")
         return
 
-    job_id, text = job
+    idx = user_job_index.get(uid, 0)
+
+    if idx >= len(jobs):
+        idx = 0
+
+    job = jobs[idx]
+    job_id, title, s_from, s_to, text = job
 
     keyboard = [
-        [InlineKeyboardButton("📩 Откликнуться", callback_data=f"apply_{job_id}")]
+        [InlineKeyboardButton("📩 Отклик", callback_data=f"apply_{job_id}")],
+        [InlineKeyboardButton("➡️ Далее", callback_data="next")]
     ]
 
     await query.edit_message_text(
-        f"💼 {text}",
+        f"💼 {title}\n💰 {s_from}-{s_to}\n\n{text}",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
+# ================= NEXT =================
+async def next_job(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+
+    uid = q.from_user.id
+    user_job_index[uid] = user_job_index.get(uid, 0) + 1
+
+    await show_job(q, uid)
+
 # ================= APPLY =================
 async def apply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+    q = update.callback_query
+    await q.answer()
 
-    user_id = query.from_user.id
-    job_id = int(query.data.split("_")[1])
+    uid = q.from_user.id
+    job_id = int(q.data.split("_")[1])
 
     cur.execute("SELECT employer_id FROM jobs WHERE id=?", (job_id,))
-    employer = cur.fetchone()
+    emp = cur.fetchone()
 
-    if not employer:
-        await query.edit_message_text("❌ ошибка")
+    if not emp:
         return
 
-    employer_id = employer[0]
-
-    cur.execute(
-        "INSERT INTO chats (job_id, candidate_id, employer_id) VALUES (?, ?, ?)",
-        (job_id, user_id, employer_id)
-    )
-    conn.commit()
-
-    await query.edit_message_text("✅ Отклик отправлен")
-
-    await context.bot.send_message(
-        employer_id,
-        "📨 Новый кандидат откликнулся"
-    )
-
-# ================= CHAT =================
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    text = update.message.text
+    employer_id = emp[0]
 
     cur.execute("""
-        SELECT job_id, candidate_id, employer_id FROM chats
-        WHERE candidate_id=? OR employer_id=?
-        ORDER BY id DESC LIMIT 1
-    """, (user_id, user_id))
+        INSERT INTO chats (job_id, candidate_id, employer_id)
+        VALUES (?, ?, ?)
+    """, (job_id, uid, employer_id))
 
-    chat = cur.fetchone()
-
-    if not chat:
-        await update.message.reply_text("❌ нет активного чата")
-        return
-
-    job_id, candidate_id, employer_id = chat
-
-    target = employer_id if user_id == candidate_id else candidate_id
-
-    await context.bot.send_message(target, f"💬 {text}")
-
-# ================= POST JOB =================
-async def post_job(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    role = get_role(user_id)
-
-    if role != "employer":
-        return
-
-    text = update.message.text
-
-    cur.execute(
-        "INSERT INTO jobs (employer_id, text) VALUES (?, ?)",
-        (user_id, text)
-    )
     conn.commit()
 
-    await update.message.reply_text("🏢 Вакансия добавлена")
-
-# ================= CLEAN =================
-async def clean_webhook():
-    try:
-        bot = Bot(TOKEN)
-        await bot.delete_webhook(drop_pending_updates=True)
-        print("🧹 webhook cleared")
-    except Exception as e:
-        print("⚠️ webhook error:", e)
+    await q.edit_message_text("✅ Отклик отправлен")
+    await context.bot.send_message(employer_id, "📨 Новый отклик")
 
 # ================= MAIN =================
 def main():
-    print("🔒 INIT BOT")
-
-    asyncio.run(clean_webhook())
-
     request = HTTPXRequest(connect_timeout=10, read_timeout=30)
 
     app = ApplicationBuilder().token(TOKEN).request(request).build()
 
-    # handlers
     app.add_handler(CommandHandler("start", start))
 
-    app.add_handler(CallbackQueryHandler(role_handler, pattern="role_"))
-    app.add_handler(CallbackQueryHandler(show_jobs, pattern="jobs"))
+    app.add_handler(CallbackQueryHandler(role_handler, pattern="candidate|employer"))
+    app.add_handler(CallbackQueryHandler(jobs, pattern="jobs"))
+    app.add_handler(CallbackQueryHandler(next_job, pattern="next"))
     app.add_handler(CallbackQueryHandler(apply, pattern="apply_"))
 
-    app.add_handler(MessageHandler(filters.Regex("^(🏢|👷)"), post_job))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    print("✅ BOT RUNNING")
-
+    print("✅ V20 RUNNING")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
-
    
