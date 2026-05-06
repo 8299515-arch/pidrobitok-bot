@@ -202,9 +202,31 @@ async def post_job(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🏢 Вакансия добавлена")
 
 # ================= MAIN =================
-
 def main():
-    app = ApplicationBuilder().token(TOKEN).build()
+    print("🔒 SAFE START INIT")
+
+    # ================= CLEAN OLD STATE =================
+
+    async def clean():
+        try:
+            bot = Bot(TOKEN)
+            await bot.delete_webhook(drop_pending_updates=True)
+            print("🧹 webhook cleared")
+        except Exception as e:
+            print("⚠️ webhook error:", e)
+
+    asyncio.run(clean())
+
+    # ================= REQUEST FIX =================
+
+    request = HTTPXRequest(
+        connect_timeout=10,
+        read_timeout=30
+    )
+
+    app = ApplicationBuilder().token(TOKEN).request(request).build()
+
+    # ================= HANDLERS =================
 
     app.add_handler(CommandHandler("start", start))
 
@@ -215,9 +237,13 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, post_job))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    print("✅ V17 RUNNING")
+    print("✅ V17 RUNNING SAFE MODE")
 
-    app.run_polling()
+    # ================= RUN =================
 
-if __name__ == "__main__":
-    main()
+    app.run_polling(
+        drop_pending_updates=True,
+        allowed_updates=["message", "callback_query"]
+    )
+
+   
