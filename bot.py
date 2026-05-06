@@ -1,175 +1,121 @@
 import os
 import sys
+import time
+import psutil
+import logging
 import sqlite3
 from dotenv import load_dotenv
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
-    CallbackQueryHandler,
     MessageHandler,
+    CallbackQueryHandler,
     ContextTypes,
     filters
 )
 
-print("🚀 V12.3 SAFE STARTED")
+from telegram.request import HTTPXRequest
+from telegram.error import TimedOut, NetworkError, Conflict
 
-# ---------------- LOCK SYSTEM ----------------
+print("🚀 V13.5 PRO STARTING")
+
+# ================= LOGGING =================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+
+# ================= SAFE LOCK =================
 
 LOCK_FILE = "bot.lock"
 
+def is_process_running(pid):
+    return psutil.pid_exists(pid)
+
 if os.path.exists(LOCK_FILE):
-    print("⛔ BOT ALREADY RUNNING (LOCK ACTIVE)")
-    sys.exit()
+    try:
+        with open(LOCK_FILE, "r") as f:
+            old_pid = int(f.read().strip())
+
+        if is_process_running(old_pid):
+            print("⛔ BOT ALREADY RUNNING")
+            sys.exit()
+
+    except:
+        print("🧹 BAD LOCK FIXED")
 
 with open(LOCK_FILE, "w") as f:
-    f.write("running")
+    f.write(str(os.getpid()))
 
-print("🔒 LOCK CREATED")
+print("🔒 SAFE LOCK ACTIVE")
 
-# ---------------- ENV ----------------
+import atexit
+
+def cleanup():
+    if os.path.exists(LOCK_FILE):
+        os.remove(LOCK_FILE)
+        print("🧹 LOCK REMOVED")
+
+atexit.register(cleanup)
+
+# ================= ENV =================
 
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 
-# ---------------- DB ----------------
+# ================= DB =================
 
-conn = sqlite3.connect("v12.db", check_same_thread=False)
+conn = sqlite3.connect("bot.db", check_same_thread=False)
 cur = conn.cursor()
-
-cur.execute("""
-CREATE TABLE IF NOT EXISTS users (
-id INTEGER PRIMARY KEY
-)
-""")
 
 cur.execute("""
 CREATE TABLE IF NOT EXISTS jobs (
 id INTEGER PRIMARY KEY AUTOINCREMENT,
-title TEXT
-)
-""")
-
-cur.execute("""
-CREATE TABLE IF NOT EXISTS chats (
-id INTEGER PRIMARY KEY AUTOINCREMENT,
-job_id INTEGER,
-candidate_id INTEGER,
-employer_id INTEGER
-)
-""")
-
-cur.execute("""
-CREATE TABLE IF NOT EXISTS messages (
-id INTEGER PRIMARY KEY AUTOINCREMENT,
-chat_id INTEGER,
-sender_id INTEGER,
 text TEXT
 )
 """)
 
 conn.commit()
 
-# ---------------- HELPERS ----------------
-
-def add_job(title):
-    cur.execute("INSERT INTO jobs (title) VALUES (?)", (title,))
-    conn.commit()
-
-def get_jobs():
-    cur.execute("SELECT * FROM jobs ORDER BY id DESC")
-    return cur.fetchall()
-
-def get_chat(user_id):
-    cur.execute("""
-        SELECT id, candidate_id, employer_id FROM chats
-        WHERE candidate_id=? OR employer_id=?
-        ORDER BY id DESC LIMIT 1
-    """, (user_id, user_id))
-    return cur.fetchone()
-
-# ---------------- COMMANDS ----------------
+# ================= HANDLERS =================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🚀 V12.3 SAFE BOT\n\n"
-        "/jobs — вакансии\n"
-        "/postjob текст — добавить вакансию"
-    )
+    await update.message.reply_text("🚀 V13.5 PRO BOT WORKING")
+
+async def jobs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cur.execute("SELECT text FROM jobs ORDER BY id DESC")
+    rows = cur.fetchall()
+
+    if not rows:
+        await update.message.reply_text("📭 Нет вакансий")
+        return
+
+    for r in rows[:10]:
+        await update.message.reply_text(f"💼 {r[0]}")
 
 async def postjob(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = " ".join(context.args)
 
     if not text:
-        await update.message.reply_text("❌ Введите текст")
+        await update.message.reply_text("❌ пусто")
         return
 
-    add_job(text)
-
-    await update.message.reply_text("🏢 Вакансия добавлена")
-
-async def jobs(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    jobs = get_jobs()
-
-    if not jobs:
-        await update.message.reply_text("📭 Нет вакансий")
-        return
-
-    for j in jobs:
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📩 Отклик", callback_data=f"apply_{j[0]}")]
-        ])
-
-        await update.message.reply_text(f"💼 {j[1]}", reply_markup=keyboard)
-
-# ---------------- CHAT CREATE ----------------
-
-async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-
-    job_id = int(q.data.replace("apply_", ""))
-    candidate_id = q.from_user.id
-
-    cur.execute("""
-        INSERT INTO chats (job_id, candidate_id, employer_id)
-        VALUES (?, ?, ?)
-    """, (job_id, candidate_id, 0))
-
+    cur.execute("INSERT INTO jobs (text) VALUES (?)", (text,))
     conn.commit()
 
-    await q.message.reply_text("💬 Чат создан. Пишите сообщение.")
+    await update.message.reply_text("🏢 добавлено")
 
-# ---------------- MESSAGE ROUTING ----------------
+# ================= ERROR HANDLER =================
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    text = update.message.text
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    logging.error(f"ERROR: {context.error}")
 
-    chat = get_chat(user_id)
-
-    if not chat:
-        return
-
-    chat_id, candidate_id, employer_id = chat
-
-    cur.execute("""
-        INSERT INTO messages (chat_id, sender_id, text)
-        VALUES (?, ?, ?)
-    """, (chat_id, user_id, text))
-
-    conn.commit()
-
-    await update.message.reply_text("📨 Сообщение отправлено")
-
-# ---------------- MAIN ----------------
-from telegram.request import HTTPXRequest
-import os
+# ================= MAIN =================
 
 def main():
-    print("🚀 BOT START")
-
     request = HTTPXRequest(
         connect_timeout=10,
         read_timeout=30
@@ -181,17 +127,27 @@ def main():
     app.add_handler(CommandHandler("jobs", jobs))
     app.add_handler(CommandHandler("postjob", postjob))
 
-    app.add_handler(CallbackQueryHandler(callback))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_error_handler(error_handler)
 
-    print("✅ BOT RUNNING SAFE MODE")
+    # ================= SAFE RETRY LOOP =================
 
-    try:
-        app.run_polling()
-    finally:
-        if os.path.exists(LOCK_FILE):
-            os.remove(LOCK_FILE)
-            print("🧹 LOCK REMOVED")
+    while True:
+        try:
+            print("✅ BOT RUNNING (PRO MODE)")
+            app.run_polling(
+                drop_pending_updates=True,
+                allowed_updates=Update.ALL_TYPES
+            )
+
+        except (TimedOut, NetworkError, Conflict) as e:
+            print(f"⚠️ RESTARTING BOT DUE TO ERROR: {e}")
+            time.sleep(3)
+
+        except Exception as e:
+            print(f"🔥 FATAL ERROR: {e}")
+            time.sleep(5)
+
+# ================= START =================
 
 if __name__ == "__main__":
     main()
