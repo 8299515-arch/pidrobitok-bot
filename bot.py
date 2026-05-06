@@ -19,7 +19,7 @@ from telegram.ext import (
 # ENV
 # ======================
 load_dotenv()
-
+print("TOKEN:", BOT_TOKEN)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
