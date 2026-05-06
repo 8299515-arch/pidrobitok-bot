@@ -4,7 +4,7 @@ import httpx
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
-pip install google-genai
+
 
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
