@@ -16,6 +16,7 @@ class SQLiteStorage:
         self._connection = sqlite3.connect(path, check_same_thread=False)
         self._connection.row_factory = sqlite3.Row
         self._lock = Lock()
+        self._closed = False
         self._initialize()
 
     def _initialize(self) -> None:
@@ -59,6 +60,13 @@ class SQLiteStorage:
                 )
                 """
             )
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._connection.close()
+            self._closed = True
 
     def get_profile(self, user_id: int) -> tuple[tuple[str, ...], str | None, int | None, bool] | None:
         with self._lock:
