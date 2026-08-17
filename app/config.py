@@ -15,6 +15,7 @@ class Settings:
     telegram_job_channels: tuple[str, ...] = ()
     job_source_limit: int = 10
     database_path: str = "data/pidrobitok.sqlite3"
+    monitor_poll_seconds: int = 60
 
     @classmethod
     def from_environment(cls) -> "Settings":
@@ -33,8 +34,9 @@ class Settings:
         )
         try:
             job_source_limit = max(1, int(os.getenv("JOB_SOURCE_LIMIT", "10")))
+            monitor_poll_seconds = max(30, int(os.getenv("MONITOR_POLL_SECONDS", "60")))
         except ValueError as exc:
-            raise RuntimeError("JOB_SOURCE_LIMIT must be an integer") from exc
+            raise RuntimeError("JOB_SOURCE_LIMIT and MONITOR_POLL_SECONDS must be integers") from exc
 
         database_path = os.getenv("DATABASE_PATH", "data/pidrobitok.sqlite3").strip()
         if not database_path:
@@ -47,4 +49,5 @@ class Settings:
             telegram_job_channels=channels,
             job_source_limit=job_source_limit,
             database_path=database_path,
+            monitor_poll_seconds=monitor_poll_seconds,
         )
