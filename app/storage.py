@@ -82,6 +82,23 @@ class SQLiteStorage:
             self._connection.close()
             self._closed = True
 
+    def get_admin_stats(self) -> dict[str, int | str | None]:
+        with self._lock:
+            users = int(self._connection.execute("SELECT COUNT(*) FROM candidate_profiles").fetchone()[0])
+            jobs = int(self._connection.execute("SELECT COUNT(*) FROM telegram_jobs").fetchone()[0])
+            searches = int(self._connection.execute("SELECT COUNT(*) FROM saved_searches").fetchone()[0])
+            deliveries = int(self._connection.execute("SELECT COUNT(*) FROM search_deliveries").fetchone()[0])
+            channels = int(self._connection.execute("SELECT COUNT(DISTINCT lower(channel_username)) FROM telegram_jobs").fetchone()[0])
+            row = self._connection.execute("SELECT published_at FROM telegram_jobs ORDER BY published_at DESC LIMIT 1").fetchone()
+        return {
+            "users": users,
+            "jobs": jobs,
+            "searches": searches,
+            "deliveries": deliveries,
+            "channels": channels,
+            "last_job": str(row["published_at"]) if row is not None else None,
+        }
+
     def get_profile(self, user_id: int) -> tuple[tuple[str, ...], str | None, int | None, bool] | None:
         with self._lock:
             row = self._connection.execute(
