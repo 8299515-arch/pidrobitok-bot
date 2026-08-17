@@ -1,6 +1,8 @@
 from dataclasses import dataclass, replace
 import re
 
+from app.storage import SQLiteStorage
+
 
 @dataclass(frozen=True)
 class CandidateProfile:
@@ -11,11 +13,23 @@ class CandidateProfile:
 
 
 class CandidateProfileStore:
-    def __init__(self) -> None:
+    def __init__(self, storage: SQLiteStorage) -> None:
+        self._storage = storage
         self._profiles: dict[int, CandidateProfile] = {}
 
     def get(self, user_id: int) -> CandidateProfile:
-        return self._profiles.get(user_id, CandidateProfile())
+        cached = self._profiles.get(user_id)
+        if cached is not None:
+            return cached
+
+        persisted = self._storage.get_profile(user_id)
+        if persisted is None:
+            profile = CandidateProfile()
+        else:
+            skills, city, salary_min, remote = persisted
+            profile = CandidateProfile(skills=skills, city=city, salary_min=salary_min, remote=remote)
+        self._profiles[user_id] = profile
+        return profile
 
     def update_from_text(self, user_id: int, text: str) -> CandidateProfile:
         current = self.get(user_id)
@@ -53,4 +67,11 @@ class CandidateProfileStore:
             remote=remote,
         )
         self._profiles[user_id] = profile
+        self._storage.save_profile(
+            user_id,
+            profile.skills,
+            profile.city,
+            profile.salary_min,
+            profile.remote,
+        )
         return profile
