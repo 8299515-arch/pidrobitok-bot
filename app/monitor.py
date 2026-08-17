@@ -21,6 +21,7 @@ class SavedSearchMonitor:
         self._task: asyncio.Task[None] | None = None
         self._stopped = asyncio.Event()
         self._search_tasks: set[asyncio.Task[None]] = set()
+        self._running_search_ids: set[int] = set()
 
     def start(self) -> None:
         if self._task is None or self._task.done():
@@ -43,6 +44,7 @@ class SavedSearchMonitor:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._search_tasks.clear()
+        self._running_search_ids.clear()
 
     async def _run(self) -> None:
         while not self._stopped.is_set():
@@ -63,9 +65,28 @@ class SavedSearchMonitor:
                 return
             if not self._searches.due(search):
                 continue
+            if search.search_id in self._running_search_ids:
+                continue
+            self._running_search_ids.add(search.search_id)
             task = asyncio.create_task(self._process_search(search), name=f"saved-search-{search.search_id}")
             self._search_tasks.add(task)
-            task.add_done_callback(self._search_tasks.discard)
+            task.add_done_callback(self._on_search_task_done)
+
+    def _on_search_task_done(self, task: asyncio.Task[None]) -> None:
+        self._search_tasks.discard(task)
+        search_id = self._search_id_from_task_name(task.get_name())
+        if search_id is not None:
+            self._running_search_ids.discard(search_id)
+
+    @staticmethod
+    def _search_id_from_task_name(name: str) -> int | None:
+        prefix = "saved-search-"
+        if not name.startswith(prefix):
+            return None
+        try:
+            return int(name[len(prefix) :])
+        except ValueError:
+            return None
 
     async def _process_search(self, search: SavedSearch) -> None:
         try:
