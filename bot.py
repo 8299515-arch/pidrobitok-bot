@@ -165,7 +165,8 @@ async def post_init(application: Application) -> None:
 async def post_shutdown(application: Application) -> None:
     if monitor is not None:
         await monitor.stop()
-    logger.info("Saved-search monitor stopped")
+    storage.close()
+    logger.info("Saved-search monitor stopped and SQLite storage closed")
 
 
 def main() -> None:
