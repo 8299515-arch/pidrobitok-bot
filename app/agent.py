@@ -6,7 +6,8 @@ import httpx
 
 from app.config import Settings
 from app.memory import ConversationMemory
-from app.profile import CandidateProfile, CandidateProfileStore
+from app.profile import CandidateProfileStore
+from app.storage import SQLiteStorage
 from app.tools.job_aggregator import JobAggregator
 from app.tools.job_pipeline import JobPipeline
 from app.tools.job_ranker import JobRanker
@@ -29,7 +30,8 @@ class CareerAgent:
         self._client = genai.Client(api_key=settings.google_api_key)
         self._model = settings.ai_model
         self._memory = ConversationMemory(settings.max_history_messages)
-        self._profiles = CandidateProfileStore()
+        storage = SQLiteStorage(settings.database_path)
+        self._profiles = CandidateProfileStore(storage)
         self._source_limit = settings.job_source_limit
         self._job_sources = (
             JobSearchTool(),
@@ -116,7 +118,7 @@ class CareerAgent:
         return text or "Не удалось сформировать ответ. Попробуй сформулировать запрос иначе."
 
     @staticmethod
-    def _build_job_query(text: str, profile: CandidateProfile) -> str:
+    def _build_job_query(text: str, profile: object) -> str:
         normalized = text.casefold()
         parts: list[str] = []
 
@@ -149,11 +151,6 @@ class CareerAgent:
     @staticmethod
     def _looks_like_job_search(text: str) -> bool:
         keywords = (
-            "ваканс",
-            "работ",
-            "job",
-            "найди работу",
-            "ищу работу",
-            "поищи работу",
+            "ваканс", "работ", "job", "найди работу", "ищу работу", "поищи работу",
         )
         return any(keyword in text for keyword in keywords)
