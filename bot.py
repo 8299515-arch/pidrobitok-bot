@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timezone
 
 from telegram import ReplyKeyboardMarkup, Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
@@ -128,6 +129,37 @@ async def unwatch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("🗑 Мониторинг удалён." if deleted else "Мониторинг не найден.")
 
 
+async def channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    post = update.channel_post
+    if post is None or post.chat.username is None:
+        return
+
+    configured_channels = {
+        channel.removeprefix("@").strip().casefold()
+        for channel in settings.telegram_job_channels
+    }
+    channel_username = post.chat.username.casefold()
+    if channel_username not in configured_channels:
+        return
+
+    text = (post.text or post.caption or "").strip()
+    if not text:
+        return
+
+    url = f"https://t.me/{post.chat.username}/{post.message_id}"
+    title = next((line.strip() for line in text.splitlines() if line.strip()), text)[:180]
+    published_at = post.date if post.date.tzinfo is not None else post.date.replace(tzinfo=timezone.utc)
+    storage.save_telegram_post(
+        channel_username=post.chat.username,
+        message_id=post.message_id,
+        title=title,
+        description=text,
+        url=url,
+        published_at=published_at,
+    )
+    logger.info("Stored Telegram job post %s/%s", post.chat.username, post.message_id)
+
+
 async def router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message is None or update.effective_user is None:
         return
@@ -181,6 +213,7 @@ def main() -> None:
     application.add_handler(CommandHandler("watch", watch))
     application.add_handler(CommandHandler("watches", watches))
     application.add_handler(CommandHandler("unwatch", unwatch))
+    application.add_handler(MessageHandler(filters.ChatType.CHANNEL, channel_post))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, router))
 
     logger.info("Pidrobitok AI Agent is starting")
