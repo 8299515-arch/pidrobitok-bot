@@ -1,5 +1,6 @@
 from google import genai
 from google.genai import types
+import httpx
 
 from app.config import Settings
 from app.memory import ConversationMemory
