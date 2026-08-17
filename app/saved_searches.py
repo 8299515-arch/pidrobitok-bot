@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import TYPE_CHECKING
 
-from app.storage import SQLiteStorage
+if TYPE_CHECKING:
+    from app.storage import SQLiteStorage
 
 
 @dataclass(frozen=True)
