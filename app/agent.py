@@ -7,6 +7,7 @@ import httpx
 from app.config import Settings
 from app.memory import ConversationMemory
 from app.profile import CandidateProfileStore
+from app.query_parser import JobQuery, JobQueryParser
 from app.storage import SQLiteStorage
 from app.tools.job_aggregator import JobAggregator
 from app.tools.job_pipeline import JobPipeline
@@ -33,44 +34,38 @@ class CareerAgent:
         storage = SQLiteStorage(settings.database_path)
         self._profiles = CandidateProfileStore(storage)
         self._source_limit = settings.job_source_limit
-        self._job_sources = (
-            JobSearchTool(),
-            OlxJobSource(),
-            TelegramJobSource(settings.telegram_job_channels),
-        )
+        self._job_sources = (JobSearchTool(), OlxJobSource(), TelegramJobSource(settings.telegram_job_channels))
         self._job_pipeline = JobPipeline(JobAggregator(), JobRanker())
+        self._query_parser = JobQueryParser()
 
     async def respond(self, user_id: int, text: str) -> str:
         self._memory.add(user_id, "user", text)
         self._profiles.update_from_text(user_id, text)
-        normalized = text.casefold()
-
-        if self._looks_like_job_search(normalized):
+        if self._looks_like_job_search(text.casefold()):
             answer = await self._search_jobs(user_id, text)
         else:
             answer = await self._ask_model(user_id)
-
         self._memory.add(user_id, "assistant", answer)
         return answer
 
     async def search_ranked_jobs(self, user_id: int, text: str) -> list[RankedJob]:
         profile = self._profiles.get(user_id)
-        query = self._build_job_query(text, profile)
-        location = profile.city
+        parsed = self._query_parser.parse(text)
+        query = self._build_job_query(parsed, profile)
+        location = parsed.city or profile.city
         source_results = await asyncio.gather(
-            *(
-                self._safe_source_search(source, query=query, location=location)
-                for source in self._job_sources
-            )
+            *(self._safe_source_search(source, query=query, location=location) for source in self._job_sources)
         )
-        return self._job_pipeline.run(source_results, profile, limit=self._source_limit)
+        return self._job_pipeline.run(source_results, profile, query=parsed, limit=self._source_limit)
 
     async def _search_jobs(self, user_id: int, text: str) -> str:
         ranked_jobs = await self.search_ranked_jobs(user_id, text)
         if not ranked_jobs:
             return "По доступным источникам подходящих вакансий не найдено."
-
-        lines = [f"🔎 Лучшие вакансии по запросу: {self._build_job_query(text, self._profiles.get(user_id))}", ""]
+        profile = self._profiles.get(user_id)
+        parsed = self._query_parser.parse(text)
+        query = self._build_job_query(parsed, profile)
+        lines = [f"🔎 Лучшие вакансии: {query}", ""]
         for index, ranked in enumerate(ranked_jobs, start=1):
             lines.append(self.format_ranked_job(ranked, index=index))
             lines.append("")
@@ -81,11 +76,12 @@ class CareerAgent:
         job = ranked.job
         prefix = f"{index}. " if index is not None else ""
         lines = [f"{prefix}{job.title} — совпадение {ranked.score}%", f"   Источник: {job.source.value}"]
+        if job.company:
+            lines.append(f"   🏢 {job.company}")
         if job.city:
             lines.append(f"   📍 {job.city}")
         if job.salary_min is not None:
-            salary = CareerAgent._format_salary(job.salary_min, job.salary_max, job.currency)
-            lines.append(f"   💰 {salary}")
+            lines.append(f"   💰 {CareerAgent._format_salary(job.salary_min, job.salary_max, job.currency)}")
         if job.remote is True:
             lines.append("   🏠 Удалённая работа")
         if ranked.reasons:
@@ -96,67 +92,42 @@ class CareerAgent:
     @staticmethod
     async def _safe_source_search(source: object, *, query: str, location: str | None) -> list:
         try:
-            search = getattr(source, "search")
-            return list(await search(query, location=location, limit=10))
+            return list(await getattr(source, "search")(query, location=location, limit=10))
         except (httpx.HTTPError, TimeoutError):
             return []
         except Exception:
             return []
 
     async def _ask_model(self, user_id: int) -> str:
-        history = self._memory.history(user_id)
         contents = [
-            types.Content(
-                role="model" if message.role == "assistant" else "user",
-                parts=[types.Part(text=message.content)],
-            )
-            for message in history
+            types.Content(role="model" if message.role == "assistant" else "user", parts=[types.Part(text=message.content)])
+            for message in self._memory.history(user_id)
         ]
-
         response = await self._client.aio.models.generate_content(
             model=self._model,
             contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=self._system_instruction,
-            ),
+            config=types.GenerateContentConfig(system_instruction=self._system_instruction),
         )
         text = (response.text or "").strip()
         return text or "Не удалось сформировать ответ. Попробуй сформулировать запрос иначе."
 
     @staticmethod
-    def _build_job_query(text: str, profile: object) -> str:
-        normalized = text.casefold()
-        parts: list[str] = []
-
-        for skill in (
-            "python", "django", "fastapi", "flask", "javascript", "typescript",
-            "react", "flutter", "java", "c++",
-        ):
-            if skill in normalized:
-                parts.append(skill)
-
-        if profile.city:
-            parts.append(profile.city)
-        elif "киев" in normalized or "київ" in normalized:
-            parts.append("kyiv")
-
-        if profile.remote or any(
-            phrase in normalized for phrase in ("remote", "удален", "удалён", "дистанцион")
-        ):
+    def _build_job_query(parsed: JobQuery, profile: object) -> str:
+        parts = list(parsed.skills) or list(getattr(profile, "skills", ()))
+        city = parsed.city or getattr(profile, "city", None)
+        if city:
+            parts.append(city)
+        if parsed.remote is True or getattr(profile, "remote", False):
             parts.append("remote")
-
-        return " ".join(dict.fromkeys(parts)) or "python kyiv"
+        return " ".join(dict.fromkeys(part for part in parts if part)) or "вакансии"
 
     @staticmethod
     def _format_salary(minimum: object, maximum: object | None, currency: str | None) -> str:
-        currency_label = currency or ""
+        label = currency or ""
         if maximum is None or minimum == maximum:
-            return f"{minimum} {currency_label}".strip()
-        return f"{minimum}–{maximum} {currency_label}".strip()
+            return f"{minimum} {label}".strip()
+        return f"{minimum}–{maximum} {label}".strip()
 
     @staticmethod
     def _looks_like_job_search(text: str) -> bool:
-        keywords = (
-            "ваканс", "работ", "job", "найди работу", "ищу работу", "поищи работу",
-        )
-        return any(keyword in text for keyword in keywords)
+        return any(keyword in text for keyword in ("ваканс", "работ", "job", "найди работу", "ищу работу", "поищи работу", "зарплат"))
