@@ -64,13 +64,19 @@ class SavedSearchMonitor:
                     if not self._searches.was_delivered(search.search_id, ranked.job.url)
                 ]
                 for ranked in reversed(new_jobs[:5]):
-                    await self._bot.send_message(
-                        chat_id=search.user_id,
-                        text=self._agent.format_ranked_job(ranked),
-                        disable_web_page_preview=True,
-                    )
+                    await self._send_ranked_job(search.user_id, ranked)
                     self._searches.mark_delivered(search.search_id, ranked.job.url)
             except Exception:
                 logger.exception("Saved search %s failed", search.search_id)
             finally:
                 self._searches.mark_checked(search.search_id)
+
+    async def _send_ranked_job(self, chat_id: int, ranked: object) -> None:
+        text = self._agent.format_ranked_job(ranked)
+        limit = 3900
+        for start in range(0, len(text), limit):
+            await self._bot.send_message(
+                chat_id=chat_id,
+                text=text[start : start + limit],
+                disable_web_page_preview=True,
+            )
