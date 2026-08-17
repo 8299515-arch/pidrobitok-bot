@@ -39,20 +39,23 @@ class JobPipeline:
         requested_remote = query.remote is True or profile.remote
         requested_skills = set(query.skills)
         for job in jobs:
-            if requested_city and job.city:
-                if requested_city.casefold() not in job.city.casefold() and job.remote is not True:
+            if requested_city:
+                if not job.city or (requested_city.casefold() not in job.city.casefold() and job.remote is not True):
                     continue
-            if requested_remote and job.remote is False:
+            if requested_remote and job.remote is not True:
                 continue
-            if requested_min is not None and job.salary_max is not None and job.salary_max < requested_min:
-                continue
-            if query.salary_max is not None and job.salary_min is not None and job.salary_min > query.salary_max:
-                continue
+            if requested_min is not None:
+                # An explicit salary floor is a hard requirement: unknown salary is not a match.
+                if job.salary_max is None or job.salary_max < requested_min:
+                    continue
+            if query.salary_max is not None:
+                if job.salary_min is None or job.salary_min > query.salary_max:
+                    continue
             if query.employment and job.employment_type.value != query.employment:
                 continue
             if requested_skills:
                 haystack = " ".join(part for part in (job.title, job.description) if part).casefold()
-                if not any(skill.casefold() in haystack for skill in requested_skills):
+                if not all(skill.casefold() in haystack for skill in requested_skills):
                     continue
             result.append(job)
         return result
