@@ -10,7 +10,7 @@ load_dotenv()
 class Settings:
     bot_token: str
     google_api_key: str
-    ai_model: str = "gemini-1.5-flash"
+    ai_model: str = "gemini-3.6-flash"
     max_history_messages: int = 12
 
     @classmethod
@@ -26,5 +26,5 @@ class Settings:
         return cls(
             bot_token=bot_token,
             google_api_key=google_api_key,
-            ai_model=os.getenv("AI_MODEL", "gemini-1.5-flash").strip(),
+            ai_model=os.getenv("AI_MODEL", "gemini-3.6-flash").strip(),
         )
