@@ -45,9 +45,7 @@ class SQLiteStorage:
                 )
                 """
             )
-            columns = {
-                str(row[1]) for row in self._connection.execute("PRAGMA table_info(saved_searches)").fetchall()
-            }
+            columns = {str(row[1]) for row in self._connection.execute("PRAGMA table_info(saved_searches)").fetchall()}
             if "last_checked_at" not in columns:
                 self._connection.execute("ALTER TABLE saved_searches ADD COLUMN last_checked_at TEXT")
             self._connection.execute(
@@ -120,17 +118,11 @@ class SQLiteStorage:
     def mark_saved_search_checked(self, search_id: int) -> None:
         now = datetime.now(timezone.utc).isoformat()
         with self._lock, self._connection:
-            self._connection.execute(
-                "UPDATE saved_searches SET last_checked_at = ? WHERE id = ?",
-                (now, search_id),
-            )
+            self._connection.execute("UPDATE saved_searches SET last_checked_at = ? WHERE id = ?", (now, search_id))
 
     def saved_search_due(self, search: SavedSearch) -> bool:
         with self._lock:
-            row = self._connection.execute(
-                "SELECT last_checked_at FROM saved_searches WHERE id = ?",
-                (search.search_id,),
-            ).fetchone()
+            row = self._connection.execute("SELECT last_checked_at FROM saved_searches WHERE id = ?", (search.search_id,)).fetchone()
         if row is None or row["last_checked_at"] is None:
             return True
         try:
@@ -139,31 +131,26 @@ class SQLiteStorage:
             return True
         if last_checked.tzinfo is None:
             last_checked = last_checked.replace(tzinfo=timezone.utc)
-        elapsed = datetime.now(timezone.utc) - last_checked
-        return elapsed.total_seconds() >= search.interval_minutes * 60
+        return (datetime.now(timezone.utc) - last_checked).total_seconds() >= search.interval_minutes * 60
 
     def delete_saved_search(self, user_id: int, search_id: int) -> bool:
         with self._lock, self._connection:
-            cursor = self._connection.execute(
-                "DELETE FROM saved_searches WHERE id = ? AND user_id = ?",
-                (search_id, user_id),
-            )
+            cursor = self._connection.execute("DELETE FROM saved_searches WHERE id = ? AND user_id = ?", (search_id, user_id))
         return cursor.rowcount == 1
+
+    def has_search_deliveries(self, search_id: int) -> bool:
+        with self._lock:
+            row = self._connection.execute("SELECT 1 FROM search_deliveries WHERE search_id = ? LIMIT 1", (search_id,)).fetchone()
+        return row is not None
 
     def was_search_job_delivered(self, search_id: int, job_url: str) -> bool:
         with self._lock:
-            row = self._connection.execute(
-                "SELECT 1 FROM search_deliveries WHERE search_id = ? AND job_url = ?",
-                (search_id, job_url),
-            ).fetchone()
+            row = self._connection.execute("SELECT 1 FROM search_deliveries WHERE search_id = ? AND job_url = ?", (search_id, job_url)).fetchone()
         return row is not None
 
     def mark_search_job_delivered(self, search_id: int, job_url: str) -> None:
         with self._lock, self._connection:
-            self._connection.execute(
-                "INSERT OR IGNORE INTO search_deliveries (search_id, job_url) VALUES (?, ?)",
-                (search_id, job_url),
-            )
+            self._connection.execute("INSERT OR IGNORE INTO search_deliveries (search_id, job_url) VALUES (?, ?)", (search_id, job_url))
 
     @staticmethod
     def _saved_search_from_row(row: sqlite3.Row) -> SavedSearch:
