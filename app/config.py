@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 import os
 
@@ -12,7 +14,7 @@ class Settings:
     google_api_key: str
     ai_model: str = "gemini-3.6-flash"
     max_history_messages: int = 12
-    telegram_job_channels: tuple[str, ...] = ()
+    telegram_job_channels: tuple[str, ...] = ("@PodrabotkaKiev_1",)
     job_source_limit: int = 10
     database_path: str = "data/pidrobitok.sqlite3"
     monitor_poll_seconds: int = 60
@@ -27,9 +29,10 @@ class Settings:
         if not google_api_key:
             raise RuntimeError("GOOGLE_API_KEY is not configured")
 
+        raw_channels = os.getenv("TELEGRAM_JOB_CHANNELS")
         channels = tuple(
             channel.strip()
-            for channel in os.getenv("TELEGRAM_JOB_CHANNELS", "").split(",")
+            for channel in (raw_channels if raw_channels is not None else ",".join(cls.telegram_job_channels)).split(",")
             if channel.strip()
         )
         try:
