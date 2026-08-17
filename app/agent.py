@@ -123,11 +123,16 @@ class CareerAgent:
     def _build_job_query(parsed: JobQuery, profile: object) -> str:
         """Build a source query from explicit user constraints only."""
         parts = list(parsed.skills)
-        city = parsed.city
-        if city:
-            parts.append(city)
+        if parsed.city:
+            parts.append(parsed.city)
         if parsed.remote is True:
             parts.append("remote")
+        if parsed.salary_min is not None:
+            parts.append(f"от {parsed.salary_min}")
+        if parsed.salary_max is not None:
+            parts.append(f"до {parsed.salary_max}")
+        if parsed.employment:
+            parts.append(parsed.employment)
         return " ".join(dict.fromkeys(part for part in parts if part)) or "вакансии"
 
     @staticmethod
