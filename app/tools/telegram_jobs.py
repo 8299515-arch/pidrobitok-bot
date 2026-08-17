@@ -19,10 +19,24 @@ class TelegramJobSource:
         "график", "графік", "занятост", "зайнятіст", "подработ", "підробіт",
         "резюме", "відгук", "отклик",
     )
-    _NON_JOB_MARKERS = ("тест", "test")
+    _NON_JOB_MARKERS = (
+        "тест", "test", "актуальные вакансии ежедневно", "актуальні вакансії щодня",
+        "оставить свое объявление", "залишити своє оголошення", "подписывайтесь",
+        "підписуйтесь", "этот канал", "цей канал", "все вакансии", "усі вакансії",
+    )
     _USER_REQUEST_MARKERS = (
         "найди", "найти", "ищи", "поищи", "покажи", "подбери", "найти актуаль",
         "найди актуаль", "пошукай", "шукаю", "ищу",
+    )
+    _SALARY_RANGE_RE = re.compile(
+        r"(?P<left>\d[\d\s.,]*)\s*[-–—]\s*(?P<right>\d[\d\s.,]*)\s*(?P<unit>к|k|тыс|тис|тысяч|тисяч|грн|uah|usd|\$|€)?",
+        re.IGNORECASE,
+    )
+    _SALARY_VALUE_RE = re.compile(
+        r"(?P<prefix>от|від|минимум|не менее|не менше)?\s*"
+        r"(?P<value>\d[\d\s.,]*)\s*"
+        r"(?P<unit>к|k|тыс|тис|тысяч|тисяч|грн|uah|usd|\$|€)?",
+        re.IGNORECASE,
     )
 
     def __init__(self, channels: Sequence[str], database_path: str) -> None:
@@ -43,8 +57,8 @@ class TelegramJobSource:
 
         storage = SQLiteStorage(self._database_path)
         try:
-            # Fetch recent job candidates first. Hard constraints are applied only
-            # after salary/city/skills have been normalized from the post itself.
+            # Fetch candidates first. Query constraints are applied after the post
+            # has been normalized so salary/city/skill filters see structured data.
             rows = storage.list_telegram_jobs(self._channels, limit=max(limit * 20, 100))
         finally:
             storage.close()
@@ -59,26 +73,33 @@ class TelegramJobSource:
             job_salary_min, job_salary_max, currency = self._extract_salary(text)
             published_at = self._parse_datetime(str(row["published_at"]))
             city = str(row["city"]) if row["city"] else self._extract_city(text) or location
-            jobs.append(Job(
-                title=title,
-                url=str(row["url"]),
-                source=JobSource.TELEGRAM,
-                city=city,
-                salary_min=job_salary_min,
-                salary_max=job_salary_max,
-                currency=currency,
-                employment_type=self._extract_employment_type(text),
-                remote=self._extract_remote(text),
-                description=text[:4000],
-                published_at=published_at,
-                source_id=str(row["source_id"]),
-            ))
+            jobs.append(
+                Job(
+                    title=title,
+                    url=str(row["url"]),
+                    source=JobSource.TELEGRAM,
+                    city=city,
+                    salary_min=job_salary_min,
+                    salary_max=job_salary_max,
+                    currency=currency,
+                    employment_type=self._extract_employment_type(text),
+                    remote=self._extract_remote(text),
+                    description=text[:4000],
+                    published_at=published_at,
+                    source_id=str(row["source_id"]),
+                )
+            )
             if len(jobs) >= limit:
                 break
         return jobs
 
     async def health(self) -> dict[str, object]:
-        return {"source": self.name, "available": bool(self._channels), "channels_configured": len(self._channels), "mode": "telegram_bot_api_ingestion"}
+        return {
+            "source": self.name,
+            "available": bool(self._channels),
+            "channels_configured": len(self._channels),
+            "mode": "telegram_bot_api_ingestion",
+        }
 
     @staticmethod
     def _normalize_channel(value: str) -> str:
@@ -86,49 +107,71 @@ class TelegramJobSource:
 
     @classmethod
     def _is_job_post(cls, title: str, text: str) -> bool:
-        normalized = text.casefold().strip()
-        if len(normalized) < 20 or any(marker in normalized for marker in cls._NON_JOB_MARKERS):
+        normalized = f"{title}\n{text}".casefold().strip()
+        if len(normalized) < 20:
+            return False
+        if any(marker in normalized for marker in cls._NON_JOB_MARKERS):
             return False
         if any(marker in normalized for marker in cls._USER_REQUEST_MARKERS):
             return False
         return any(marker in normalized for marker in cls._JOB_MARKERS)
 
-    @staticmethod
-    def _extract_salary(text: str) -> tuple[Decimal | None, Decimal | None, str | None]:
-        values: list[Decimal] = []
+    @classmethod
+    def _extract_salary(cls, text: str) -> tuple[Decimal | None, Decimal | None, str | None]:
         currency: str | None = None
-        pattern = r"(?P<prefix>от|від|минимум|не менее|не менше)?\s*(?P<value>\d[\d\s.,]*)(?:\s*(?P<unit>к|k|тыс|тис|тысяч|тисяч|грн|uah|usd|\$|€))?"
-        for match in re.finditer(pattern, text.casefold()):
-            raw = match.group("value").strip().replace(" ", "").replace(",", ".")
-            try:
-                value = Decimal(raw)
-            except InvalidOperation:
-                continue
-            unit = match.group("unit") or ""
-            if value < 1000 and unit in {"к", "k", "тыс", "тис", "тысяч", "тисяч"}:
-                value *= 1000
-            if not (Decimal("1000") <= value <= Decimal("10000000")):
+
+        range_match = cls._SALARY_RANGE_RE.search(text.casefold())
+        if range_match:
+            left = cls._salary_value(range_match.group("left"), range_match.group("unit"))
+            right = cls._salary_value(range_match.group("right"), range_match.group("unit"))
+            if left is not None and right is not None:
+                currency = cls._currency(range_match.group("unit"), text)
+                return min(left, right), max(left, right), currency
+
+        values: list[Decimal] = []
+        for match in cls._SALARY_VALUE_RE.finditer(text.casefold()):
+            value = cls._salary_value(match.group("value"), match.group("unit"))
+            if value is None:
                 continue
             values.append(value)
-            if unit in {"грн", "uah"} or "грн" in text.casefold():
-                currency = "UAH"
-            elif unit in {"usd", "$"}:
-                currency = "USD"
-            elif unit == "€":
-                currency = "EUR"
+            currency = cls._currency(match.group("unit"), text) or currency
 
         if not values:
             return None, None, None
-        # A dash between two salary values means a range; otherwise the first
-        # meaningful value is treated as the minimum advertised salary.
-        if len(values) >= 2 and re.search(r"\d\s*[-–—]\s*\d", text):
-            return min(values), max(values), currency or "UAH"
         return min(values), None, currency or "UAH"
+
+    @staticmethod
+    def _salary_value(raw: str, unit: str | None) -> Decimal | None:
+        normalized = raw.strip().replace(" ", "").replace(",", ".")
+        try:
+            value = Decimal(normalized)
+        except InvalidOperation:
+            return None
+        normalized_unit = (unit or "").casefold()
+        if value < 1000 and normalized_unit in {"к", "k", "тыс", "тис", "тысяч", "тисяч"}:
+            value *= 1000
+        if not Decimal("1000") <= value <= Decimal("10000000"):
+            return None
+        return value
+
+    @staticmethod
+    def _currency(unit: str | None, text: str) -> str | None:
+        normalized_unit = (unit or "").casefold()
+        if normalized_unit in {"грн", "uah"} or "грн" in text.casefold():
+            return "UAH"
+        if normalized_unit in {"usd", "$"}:
+            return "USD"
+        if normalized_unit == "€":
+            return "EUR"
+        return None
 
     @staticmethod
     def _extract_city(text: str) -> str | None:
         normalized = text.casefold()
-        for city in ("киев", "київ", "kyiv", "кривой рог", "львов", "львів", "одесса", "одеса", "днепр", "дніпро", "харьков", "харків"):
+        for city in (
+            "киев", "київ", "kyiv", "кривой рог", "львов", "львів", "одесса",
+            "одеса", "днепр", "дніпро", "харьков", "харків",
+        ):
             if city in normalized:
                 return city.title()
         return None
