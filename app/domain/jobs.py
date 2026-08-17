@@ -52,13 +52,10 @@ class Job:
 
     @property
     def fingerprint(self) -> str:
-        """Stable semantic key for cross-source duplicate detection."""
-        parts = (
-            _normalize(self.title),
-            _normalize(self.company or ""),
-            _normalize(self.city or ""),
-        )
-        return "|".join(parts)
+        """Semantic key used only when the source provides a company identity."""
+        if not self.company:
+            return self.canonical_url
+        return "|".join((_normalize(self.title), _normalize(self.company)))
 
     @property
     def deduplication_key(self) -> str:
