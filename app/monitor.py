@@ -53,6 +53,12 @@ class SavedSearchMonitor:
                 continue
             try:
                 ranked_jobs = await self._agent.search_ranked_jobs(search.user_id, search.query)
+                if not self._searches.has_deliveries(search.search_id):
+                    for ranked in ranked_jobs:
+                        self._searches.mark_delivered(search.search_id, ranked.job.url)
+                    logger.info("Bootstrapped saved search %s with %s existing jobs", search.search_id, len(ranked_jobs))
+                    continue
+
                 new_jobs = [
                     ranked for ranked in ranked_jobs
                     if not self._searches.was_delivered(search.search_id, ranked.job.url)
