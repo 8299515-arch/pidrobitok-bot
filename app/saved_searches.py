@@ -38,6 +38,12 @@ class SavedSearchStore:
     def active(self) -> list[SavedSearch]:
         return self._storage.list_active_saved_searches()
 
+    def due(self, search: SavedSearch) -> bool:
+        return self._storage.saved_search_due(search)
+
+    def mark_checked(self, search_id: int) -> None:
+        self._storage.mark_saved_search_checked(search_id)
+
     def was_delivered(self, search_id: int, job_url: str) -> bool:
         return self._storage.was_search_job_delivered(search_id, job_url)
 
