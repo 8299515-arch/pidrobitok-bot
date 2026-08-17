@@ -1,129 +1,76 @@
-import os
-from dotenv import load_dotenv
+import logging
 
-from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram import ReplyKeyboardMarkup, Update
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
-import httpx
-from bs4 import BeautifulSoup
+from app.agent import CareerAgent
+from app.config import Settings
 
-from google import genai
+logging.basicConfig(
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
 
-# ======================
-# ENV
-# ======================
-load_dotenv()
+settings = Settings.from_environment()
+agent = CareerAgent(settings)
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-
-if not BOT_TOKEN:
-    raise Exception("❌ BOT_TOKEN не найден в .env")
-
-# ======================
-# AI (НОВЫЙ СТАБИЛЬНЫЙ SDK)
-# ======================
-client = genai.Client(api_key=GOOGLE_API_KEY)
-
-def ask_ai(text: str):
-    try:
-        res = client.models.generate_content(
-            model="gemini-1.5-flash",
-            contents=text
-        )
-        return res.text
-    except Exception as e:
-        return f"AI ошибка: {e}"
-
-# ======================
-# КНОПКИ
-# ======================
 keyboard = ReplyKeyboardMarkup(
     [
         ["📍 Киев вакансии", "💼 Вакансии"],
-        ["🤖 AI HR"]
+        ["🤖 AI HR"],
     ],
-    resize_keyboard=True
+    resize_keyboard=True,
 )
 
-# ======================
-# ВАКАНСИИ (простая версия)
-# ======================
-def get_jobs():
-    try:
-        url = "https://robota.ua/zapros/python-kyiv"
-        r = httpx.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
-        soup = BeautifulSoup(r.text, "html.parser")
 
-        jobs = []
-        for h in soup.find_all("h2"):
-            if h.text.strip():
-                jobs.append(h.text.strip())
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.message is None:
+        return
 
-        return jobs[:7]
-
-    except:
-        return ["❌ Не удалось загрузить вакансии"]
-
-# ======================
-# START
-# ======================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🚀 V4 FIXED BOT\n\nВыбери действие:",
-        reply_markup=keyboard
+        "🚀 Pidrobitok AI Agent\n\n"
+        "Я могу искать вакансии и помогать с карьерой. "
+        "Напиши запрос обычным языком.",
+        reply_markup=keyboard,
     )
 
-# ======================
-# JOBS
-# ======================
-async def jobs(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = get_jobs()
 
-    text = "📍 Вакансии Киев:\n\n"
-    for j in data:
-        text += f"• {j}\n"
-
-    await update.message.reply_text(text)
-
-# ======================
-# AI
-# ======================
-async def ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    answer = ask_ai(update.message.text)
-    await update.message.reply_text(answer)
-
-# ======================
-# ROUTER
-# ======================
-async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-
-    if text == "📍 Киев вакансии":
-        await jobs(update, context)
+async def router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.message is None or update.effective_user is None:
         return
 
-    if text == "💼 Вакансии":
-        await jobs(update, context)
-        return
+    text = update.message.text or ""
+    user_id = update.effective_user.id
 
     if text == "🤖 AI HR":
-        await update.message.reply_text("Напиши о себе (опыт, навыки)")
+        await update.message.reply_text(
+            "Расскажи о своём опыте, навыках, городе и желаемой зарплате. "
+            "Я использую это как основу для карьерного профиля."
+        )
         return
 
-    await ai(update, context)
+    if text in {"📍 Киев вакансии", "💼 Вакансии"}:
+        text = "Найди актуальные вакансии Python в Киеве"
 
-# ======================
-# MAIN
-# ======================
-def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+    try:
+        await update.message.chat.send_action("typing")
+        answer = await agent.respond(user_id, text)
+    except Exception:
+        logger.exception("Agent request failed for user %s", user_id)
+        answer = "Произошла внутренняя ошибка. Попробуй ещё раз через минуту."
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, router))
+    await update.message.reply_text(answer)
 
-    print("🚀 V4 FIXED RUNNING...")
-    app.run_polling()
+
+def main() -> None:
+    application = Application.builder().token(settings.bot_token).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, router))
+
+    logger.info("Pidrobitok AI Agent is starting")
+    application.run_polling()
+
 
 if __name__ == "__main__":
     main()
