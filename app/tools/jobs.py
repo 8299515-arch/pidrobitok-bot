@@ -16,7 +16,38 @@ class JobSearchTool:
 
     _base_url = "https://robota.ua/zapros"
     _origin = "https://robota.ua"
-    _user_agent = "Mozilla/5.0 (compatible; PidrobitokBot/1.0)"
+    _user_agent = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/151.0.0.0 Safari/537.36"
+    )
+    _location_slugs = {
+        "київ": "kyiv",
+        "киев": "kyiv",
+        "kyiv": "kyiv",
+        "kiev": "kyiv",
+        "львів": "lviv",
+        "львов": "lviv",
+        "lviv": "lviv",
+        "одеса": "odesa",
+        "одесса": "odesa",
+        "odesa": "odesa",
+        "дніпро": "dnipro",
+        "днепр": "dnipro",
+        "dnipro": "dnipro",
+        "харків": "kharkiv",
+        "харьков": "kharkiv",
+        "kharkiv": "kharkiv",
+        "запоріжжя": "zaporizhzhia",
+        "запорожье": "zaporizhzhia",
+        "zaporizhzhia": "zaporizhzhia",
+        "вінниця": "vinnytsia",
+        "винница": "vinnytsia",
+        "vinnytsia": "vinnytsia",
+        "україна": "ukraine",
+        "украина": "ukraine",
+        "ukraine": "ukraine",
+    }
 
     @property
     def name(self) -> str:
@@ -24,19 +55,34 @@ class JobSearchTool:
 
     async def search(
         self,
-        query: str = "python kyiv",
+        query: str = "python",
         *,
         location: str | None = None,
         limit: int = 10,
     ) -> list[Job]:
         normalized_query = " ".join(query.split()).strip() or "python"
-        if location and location.casefold() not in normalized_query.casefold():
-            normalized_query = f"{normalized_query} {location}".strip()
+        location_slug = self._location_slug(location)
 
-        search_url = f"{self._base_url}/{quote(normalized_query, safe='')}"
-        headers = {"User-Agent": self._user_agent}
+        if location:
+            location_tokens = {token.casefold() for token in location.split() if token}
+            query_tokens = normalized_query.split()
+            filtered_tokens = [
+                token for token in query_tokens
+                if token.casefold() not in location_tokens
+            ]
+            normalized_query = " ".join(filtered_tokens).strip() or "python"
 
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+        search_url = f"{self._base_url}/{quote(normalized_query, safe='')}/{location_slug}"
+        headers = {
+            "User-Agent": self._user_agent,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "uk-UA,uk;q=0.9,ru;q=0.8,en-US;q=0.7,en;q=0.6",
+            "Referer": f"{self._origin}/",
+            "DNT": "1",
+            "Upgrade-Insecure-Requests": "1",
+        }
+
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
             response = await client.get(search_url, headers=headers)
             response.raise_for_status()
 
@@ -78,6 +124,13 @@ class JobSearchTool:
 
     async def health(self) -> dict[str, object]:
         return {"source": self.name, "available": True}
+
+    @classmethod
+    def _location_slug(cls, location: str | None) -> str:
+        if not location:
+            return "ukraine"
+        normalized = " ".join(location.split()).strip().casefold()
+        return cls._location_slugs.get(normalized, "ukraine")
 
     @staticmethod
     def _extract_location(text: str) -> str | None:
