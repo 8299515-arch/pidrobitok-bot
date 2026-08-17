@@ -34,7 +34,11 @@ class CareerAgent:
         storage = SQLiteStorage(settings.database_path)
         self._profiles = CandidateProfileStore(storage)
         self._source_limit = settings.job_source_limit
-        self._job_sources = (JobSearchTool(), OlxJobSource(), TelegramJobSource(settings.telegram_job_channels))
+        self._job_sources = (
+            JobSearchTool(),
+            OlxJobSource(),
+            TelegramJobSource(settings.telegram_job_channels, settings.database_path),
+        )
         self._job_pipeline = JobPipeline(JobAggregator(), JobRanker())
         self._query_parser = JobQueryParser()
 
