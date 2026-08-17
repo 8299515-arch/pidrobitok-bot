@@ -79,7 +79,11 @@ class CareerAgent:
     def format_ranked_job(ranked: RankedJob, index: int | None = None) -> str:
         job = ranked.job
         prefix = f"{index}. " if index is not None else ""
-        lines = [f"{prefix}{job.title} — совпадение {ranked.score}%", f"   Источник: {job.source.value}"]
+        lines = [f"{prefix}{job.title}"]
+        lines.append(f"   🎯 Запрос: {ranked.query_score}%")
+        if ranked.candidate_score is not None:
+            lines.append(f"   👤 Вам подходит: {ranked.candidate_score}%")
+        lines.append(f"   Источник: {job.source.value}")
         if job.company:
             lines.append(f"   🏢 {job.company}")
         if job.city:
@@ -117,12 +121,7 @@ class CareerAgent:
 
     @staticmethod
     def _build_job_query(parsed: JobQuery, profile: object) -> str:
-        """Build a source query from explicit user constraints only.
-
-        Candidate profile skills are intentionally not injected into the source
-        query when the user did not request a specific skill. The profile still
-        participates in ranking, but must not narrow a generic search.
-        """
+        """Build a source query from explicit user constraints only."""
         parts = list(parsed.skills)
         city = parsed.city
         if city:
