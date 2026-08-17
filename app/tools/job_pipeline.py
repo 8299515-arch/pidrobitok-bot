@@ -45,8 +45,11 @@ class JobPipeline:
             if requested_remote and job.remote is not True:
                 continue
             if requested_min is not None:
-                # An explicit salary floor is a hard requirement: unknown salary is not a match.
-                if job.salary_max is None or job.salary_max < requested_min:
+                # A salary floor is a hard requirement. For a single advertised
+                # salary use salary_min; for a range use salary_max to determine
+                # whether the range can satisfy the requested floor.
+                advertised_upper = job.salary_max if job.salary_max is not None else job.salary_min
+                if advertised_upper is None or advertised_upper < requested_min:
                     continue
             if query.salary_max is not None:
                 if job.salary_min is None or job.salary_min > query.salary_max:
