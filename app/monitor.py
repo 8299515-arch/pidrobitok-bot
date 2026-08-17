@@ -49,7 +49,7 @@ class SavedSearchMonitor:
         for search in self._searches.active():
             if self._stopped.is_set():
                 return
-            if not self._due(search.search_id, search.interval_minutes):
+            if not self._searches.due(search):
                 continue
             try:
                 ranked_jobs = await self._agent.search_ranked_jobs(search.user_id, search.query)
@@ -66,9 +66,5 @@ class SavedSearchMonitor:
                     self._searches.mark_delivered(search.search_id, ranked.job.url)
             except Exception:
                 logger.exception("Saved search %s failed", search.search_id)
-
-    @staticmethod
-    def _due(search_id: int, interval_minutes: int) -> bool:
-        # The scheduler is intentionally conservative. A future persistent
-        # scheduler can replace this without changing the saved-search model.
-        return True
+            finally:
+                self._searches.mark_checked(search.search_id)
