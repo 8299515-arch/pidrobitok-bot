@@ -47,15 +47,19 @@ class JobQueryParser:
 
     @staticmethod
     def _salary(text: str) -> tuple[Decimal | None, Decimal | None]:
-        matches = re.findall(r"(?:(?:от|минимум|не менее|от\s*)\s*)?(\d[\d\s.,]{2,})\s*(?:к|k|тыс|тысяч|грн|uah|usd|\$|€)?", text)
+        pattern = r"(?P<prefix>от|минимум|не менее)?\s*(?P<value>\d[\d\s.,]*)(?:\s*(?:к|k|тыс|тысяч|грн|uah|usd|\$|€))?"
         values: list[Decimal] = []
-        for raw in matches:
+        for match in re.finditer(pattern, text):
+            raw = match.group("value").strip()
+            if not raw:
+                continue
             cleaned = raw.replace(" ", "").replace(",", ".")
             try:
                 value = Decimal(cleaned)
             except InvalidOperation:
                 continue
-            if value < 1000:
+            suffix = match.group(0).casefold()
+            if value < 1000 and any(marker in suffix for marker in ("к", "k", "тыс", "тысяч")):
                 value *= 1000
             if Decimal("1000") <= value <= Decimal("10000000"):
                 values.append(value)
