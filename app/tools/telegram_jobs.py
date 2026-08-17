@@ -11,8 +11,62 @@ from app.storage import SQLiteStorage
 class TelegramJobSource:
     """Searches Telegram channel posts captured by the bot."""
 
+    _JOB_MARKERS = (
+        "ваканс",
+        "вакансі",
+        "требуется",
+        "требуємо",
+        "потрібен",
+        "потрібна",
+        "потрібні",
+        "ищем",
+        "шукаємо",
+        "зарплат",
+        "оплата",
+        "ставка",
+        "грн",
+        "uah",
+        "обязанност",
+        "обов'язк",
+        "обов’язк",
+        "требован",
+        "вимог",
+        "график",
+        "графік",
+        "занятост",
+        "зайнятіст",
+        "подработ",
+        "підробіт",
+        "резюме",
+        "відгук",
+        "отклик",
+    )
+
+    _NON_JOB_MARKERS = (
+        "тест",
+        "test",
+    )
+
+    _USER_REQUEST_MARKERS = (
+        "найди",
+        "найти",
+        "ищи",
+        "поищи",
+        "покажи",
+        "подбери",
+        "найти актуаль",
+        "найди актуаль",
+        "пошукай",
+        "шукаю",
+        "ищу",
+    )
+
     def __init__(self, channels: Sequence[str], database_path: str) -> None:
-        self._channels = tuple(self._normalize_channel(channel) for channel in channels if channel.strip())
+        self._channels = tuple(
+            self._normalize_channel(channel)
+            for channel in channels
+            if channel.strip()
+        )
         self._database_path = database_path
 
     @property
@@ -39,19 +93,26 @@ class TelegramJobSource:
 
         storage = SQLiteStorage(self._database_path)
         try:
-            rows = storage.list_telegram_jobs(self._channels, limit=max(limit * 5, 50))
+            rows = storage.list_telegram_jobs(
+                self._channels,
+                limit=max(limit * 5, 50),
+            )
         finally:
             storage.close()
 
         jobs: list[Job] = []
         for row in rows:
             text = str(row["description"])
+            title = str(row["title"])
+            if not self._is_job_post(title, text):
+                continue
             if not self._matches(text, terms):
                 continue
+
             published_at = self._parse_datetime(str(row["published_at"]))
             jobs.append(
                 Job(
-                    title=str(row["title"]),
+                    title=title,
                     url=str(row["url"]),
                     source=JobSource.TELEGRAM,
                     city=str(row["city"]) if row["city"] else location,
@@ -76,7 +137,23 @@ class TelegramJobSource:
 
     @staticmethod
     def _normalize_channel(value: str) -> str:
-        return value.strip().removeprefix("@").removeprefix("https://t.me/").strip("/")
+        return (
+            value.strip()
+            .removeprefix("@")
+            .removeprefix("https://t.me/")
+            .strip("/")
+        )
+
+    @classmethod
+    def _is_job_post(cls, title: str, text: str) -> bool:
+        normalized = text.casefold().strip()
+        if len(normalized) < 20:
+            return False
+        if any(marker in normalized for marker in cls._NON_JOB_MARKERS):
+            return False
+        if any(marker in normalized for marker in cls._USER_REQUEST_MARKERS):
+            return False
+        return any(marker in normalized for marker in cls._JOB_MARKERS)
 
     @staticmethod
     def _matches(text: str, terms: list[str]) -> bool:
@@ -87,15 +164,24 @@ class TelegramJobSource:
 
     @staticmethod
     def _build_title(text: str) -> str:
-        first_line = next((line.strip() for line in text.splitlines() if line.strip()), text.strip())
+        first_line = next(
+            (line.strip() for line in text.splitlines() if line.strip()),
+            text.strip(),
+        )
         return first_line[:180]
 
     @classmethod
     def _extract_employment_type(cls, text: str) -> EmploymentType:
         normalized = text.casefold()
-        if re.search(r"full[- ]?time|повна зайнятість|полная занятость", normalized):
+        if re.search(
+            r"full[- ]?time|повна зайнятість|полная занятость",
+            normalized,
+        ):
             return EmploymentType.FULL_TIME
-        if re.search(r"part[- ]?time|неповна зайнятість|частичная занятость|подработка|підробіт", normalized):
+        if re.search(
+            r"part[- ]?time|неповна зайнятість|частичная занятость|подработка|підробіт",
+            normalized,
+        ):
             return EmploymentType.PART_TIME
         if re.search(r"contract|контракт|договор", normalized):
             return EmploymentType.CONTRACT
@@ -104,7 +190,10 @@ class TelegramJobSource:
     @staticmethod
     def _extract_remote(text: str) -> bool | None:
         normalized = text.casefold()
-        if re.search(r"remote|віддал|удален|дистанцион", normalized):
+        if re.search(
+            r"remote|віддал|удален|дистанцион",
+            normalized,
+        ):
             return True
         return None
 
