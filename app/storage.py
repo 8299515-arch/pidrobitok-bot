@@ -60,6 +60,20 @@ class SQLiteStorage:
                 )
                 """
             )
+            self._connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS telegram_jobs (
+                    source_id TEXT PRIMARY KEY,
+                    channel_username TEXT NOT NULL,
+                    message_id INTEGER NOT NULL,
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    url TEXT NOT NULL UNIQUE,
+                    city TEXT,
+                    published_at TEXT NOT NULL
+                )
+                """
+            )
 
     def close(self) -> None:
         with self._lock:
@@ -118,9 +132,7 @@ class SQLiteStorage:
 
     def list_active_saved_searches(self) -> list[SavedSearch]:
         with self._lock:
-            rows = self._connection.execute(
-                "SELECT id, user_id, query, interval_minutes, enabled, created_at FROM saved_searches WHERE enabled = 1 ORDER BY id"
-            ).fetchall()
+            rows = self._connection.execute("SELECT id, user_id, query, interval_minutes, enabled, created_at FROM saved_searches WHERE enabled = 1 ORDER BY id").fetchall()
         return [self._saved_search_from_row(row) for row in rows]
 
     def mark_saved_search_checked(self, search_id: int) -> None:
@@ -159,6 +171,44 @@ class SQLiteStorage:
     def mark_search_job_delivered(self, search_id: int, job_url: str) -> None:
         with self._lock, self._connection:
             self._connection.execute("INSERT OR IGNORE INTO search_deliveries (search_id, job_url) VALUES (?, ?)", (search_id, job_url))
+
+    def save_telegram_post(
+        self,
+        *,
+        channel_username: str,
+        message_id: int,
+        title: str,
+        description: str,
+        url: str,
+        published_at: datetime,
+        city: str | None = None,
+    ) -> None:
+        source_id = f"{channel_username}:{message_id}"
+        with self._lock, self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO telegram_jobs (source_id, channel_username, message_id, title, description, url, city, published_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(source_id) DO UPDATE SET
+                    title = excluded.title,
+                    description = excluded.description,
+                    url = excluded.url,
+                    city = excluded.city,
+                    published_at = excluded.published_at
+                """,
+                (source_id, channel_username, message_id, title, description, url, city, published_at.astimezone(timezone.utc).isoformat()),
+            )
+
+    def list_telegram_jobs(self, channels: tuple[str, ...], limit: int = 50) -> list[sqlite3.Row]:
+        normalized = tuple(channel.removeprefix("@").strip().casefold() for channel in channels if channel.strip())
+        if not normalized:
+            return []
+        placeholders = ",".join("?" for _ in normalized)
+        with self._lock:
+            return self._connection.execute(
+                f"SELECT source_id, channel_username, message_id, title, description, url, city, published_at FROM telegram_jobs WHERE lower(channel_username) IN ({placeholders}) ORDER BY published_at DESC LIMIT ?",
+                (*normalized, limit),
+            ).fetchall()
 
     @staticmethod
     def _saved_search_from_row(row: sqlite3.Row) -> SavedSearch:
