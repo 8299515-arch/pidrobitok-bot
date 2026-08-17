@@ -7,6 +7,7 @@ from telegram import Bot
 
 from app.agent import CareerAgent
 from app.saved_searches import SavedSearchStore
+from app.tools.job_ranker import RankedJob
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,8 @@ class SavedSearchMonitor:
                     continue
 
                 new_jobs = [
-                    ranked for ranked in ranked_jobs
+                    ranked
+                    for ranked in ranked_jobs
                     if not self._searches.was_delivered(search.search_id, ranked.job.url)
                 ]
                 for ranked in reversed(new_jobs[:5]):
@@ -71,7 +73,7 @@ class SavedSearchMonitor:
             finally:
                 self._searches.mark_checked(search.search_id)
 
-    async def _send_ranked_job(self, chat_id: int, ranked: object) -> None:
+    async def _send_ranked_job(self, chat_id: int, ranked: RankedJob) -> None:
         text = self._agent.format_ranked_job(ranked)
         limit = 3900
         for start in range(0, len(text), limit):
