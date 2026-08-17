@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from telegram import ReplyKeyboardMarkup, Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
+from app.admin import AdminService
 from app.agent import CareerAgent
 from app.config import Settings
 from app.monitor import SavedSearchMonitor
@@ -20,6 +21,7 @@ settings = Settings.from_environment()
 agent = CareerAgent(settings)
 storage = SQLiteStorage(settings.database_path)
 saved_searches = SavedSearchStore(storage)
+admin_service = AdminService(settings, storage)
 monitor: SavedSearchMonitor | None = None
 
 keyboard = ReplyKeyboardMarkup(
@@ -75,6 +77,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/unwatch ID — удалить мониторинг",
         reply_markup=keyboard,
     )
+
+
+async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await admin_service.handle(update, context)
 
 
 async def watch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -210,6 +216,7 @@ def main() -> None:
         .build()
     )
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("admin", admin))
     application.add_handler(CommandHandler("watch", watch))
     application.add_handler(CommandHandler("watches", watches))
     application.add_handler(CommandHandler("unwatch", unwatch))
