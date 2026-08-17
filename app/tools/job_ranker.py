@@ -128,7 +128,6 @@ class JobRanker:
             if matches:
                 weighted_match += self._SKILLS_WEIGHT * len(matches) / len(profile.skills)
 
-        if profile.skills:
             weighted_total += self._TITLE_WEIGHT
             if any(skill.casefold() in (job.title or "").casefold() for skill in profile.skills):
                 weighted_match += self._TITLE_WEIGHT
