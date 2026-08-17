@@ -30,7 +30,7 @@ class CareerAgent:
         else:
             answer = await self._ask_model(user_id)
 
-        self._memory.add(user_id, "assistant", answer)
+        self._memory.add(user_id, "model", answer)
         return answer
 
     async def _search_jobs(self) -> str:
