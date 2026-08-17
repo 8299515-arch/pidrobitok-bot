@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -50,10 +51,24 @@ class Job:
         return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}{parsed.path.rstrip('/')}"
 
     @property
+    def fingerprint(self) -> str:
+        """Stable semantic key for cross-source duplicate detection."""
+        parts = (
+            _normalize(self.title),
+            _normalize(self.company or ""),
+            _normalize(self.city or ""),
+        )
+        return "|".join(parts)
+
+    @property
     def deduplication_key(self) -> str:
         if self.source_id:
             return f"{self.source.value}:{self.source_id.strip().lower()}"
         return self.canonical_url
+
+
+def _normalize(value: str) -> str:
+    return re.sub(r"[^a-z0-9а-яіїєґ]+", " ", value.casefold()).strip()
 
 
 UNKNOWN_TEXT: Final[str] = "Не указано"
