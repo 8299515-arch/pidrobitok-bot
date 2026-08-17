@@ -10,7 +10,7 @@ from app.storage import SQLiteStorage
 
 
 class TelegramJobSource:
-    """Searches Telegram channel posts captured by the bot."""
+    """Searches normalized Telegram job posts captured by the bot."""
 
     _JOB_MARKERS = (
         "ваканс", "вакансі", "требуется", "требуємо", "потрібен", "потрібна",
@@ -26,9 +26,7 @@ class TelegramJobSource:
     )
 
     def __init__(self, channels: Sequence[str], database_path: str) -> None:
-        self._channels = tuple(
-            self._normalize_channel(channel) for channel in channels if channel.strip()
-        )
+        self._channels = tuple(self._normalize_channel(channel) for channel in channels if channel.strip())
         self._database_path = database_path
 
     @property
@@ -39,24 +37,15 @@ class TelegramJobSource:
     def configured(self) -> bool:
         return bool(self._channels)
 
-    async def search(
-        self,
-        query: str,
-        *,
-        location: str | None = None,
-        limit: int = 10,
-    ) -> list[Job]:
+    async def search(self, query: str, *, location: str | None = None, limit: int = 10) -> list[Job]:
         if not self._channels or limit <= 0:
             return []
 
-        salary_min, salary_max = self._extract_salary_constraint(query)
-        terms = [part.casefold() for part in query.split() if part.strip() and not any(char.isdigit() for char in part)]
-        if location and location.casefold() not in terms:
-            terms.append(location.casefold())
-
         storage = SQLiteStorage(self._database_path)
         try:
-            rows = storage.list_telegram_jobs(self._channels, limit=max(limit * 5, 50))
+            # Fetch recent job candidates first. Hard constraints are applied only
+            # after salary/city/skills have been normalized from the post itself.
+            rows = storage.list_telegram_jobs(self._channels, limit=max(limit * 20, 100))
         finally:
             storage.close()
 
@@ -64,35 +53,26 @@ class TelegramJobSource:
         for row in rows:
             text = str(row["description"])
             title = str(row["title"])
-            if not self._is_job_post(title, text) or not self._matches(text, terms):
+            if not self._is_job_post(title, text):
                 continue
 
             job_salary_min, job_salary_max, currency = self._extract_salary(text)
-            if salary_min is not None:
-                if job_salary_max is None or job_salary_max < salary_min:
-                    continue
-            if salary_max is not None and job_salary_min is not None and job_salary_min > salary_max:
-                continue
-            if salary_max is not None and job_salary_min is None:
-                continue
-
             published_at = self._parse_datetime(str(row["published_at"]))
-            jobs.append(
-                Job(
-                    title=title,
-                    url=str(row["url"]),
-                    source=JobSource.TELEGRAM,
-                    city=str(row["city"]) if row["city"] else location,
-                    salary_min=job_salary_min,
-                    salary_max=job_salary_max,
-                    currency=currency,
-                    employment_type=self._extract_employment_type(text),
-                    remote=self._extract_remote(text),
-                    description=text[:4000],
-                    published_at=published_at,
-                    source_id=str(row["source_id"]),
-                )
-            )
+            city = str(row["city"]) if row["city"] else self._extract_city(text) or location
+            jobs.append(Job(
+                title=title,
+                url=str(row["url"]),
+                source=JobSource.TELEGRAM,
+                city=city,
+                salary_min=job_salary_min,
+                salary_max=job_salary_max,
+                currency=currency,
+                employment_type=self._extract_employment_type(text),
+                remote=self._extract_remote(text),
+                description=text[:4000],
+                published_at=published_at,
+                source_id=str(row["source_id"]),
+            ))
             if len(jobs) >= limit:
                 break
         return jobs
@@ -114,52 +94,44 @@ class TelegramJobSource:
         return any(marker in normalized for marker in cls._JOB_MARKERS)
 
     @staticmethod
-    def _matches(text: str, terms: list[str]) -> bool:
-        if not terms:
-            return True
-        normalized = text.casefold()
-        return all(term in normalized for term in terms)
-
-    @staticmethod
-    def _extract_salary_constraint(text: str) -> tuple[Decimal | None, Decimal | None]:
-        values, minimum_marked = TelegramJobSource._salary_values(text)
-        if not values:
-            return None, None
-        if len(values) >= 2 and any(marker in text.casefold() for marker in ("-", "до", "–")):
-            return min(values), max(values)
-        if minimum_marked:
-            return min(values), None
-        return min(values), None
-
-    @staticmethod
     def _extract_salary(text: str) -> tuple[Decimal | None, Decimal | None, str | None]:
-        values, _ = TelegramJobSource._salary_values(text)
-        if not values:
-            return None, None, None
-        if len(values) >= 2 and any(marker in text.casefold() for marker in ("-", "до", "–")):
-            return min(values), max(values), "UAH"
-        return min(values), None, "UAH"
-
-    @staticmethod
-    def _salary_values(text: str) -> tuple[list[Decimal], bool]:
         values: list[Decimal] = []
-        minimum_marked = False
+        currency: str | None = None
         pattern = r"(?P<prefix>от|від|минимум|не менее|не менше)?\s*(?P<value>\d[\d\s.,]*)(?:\s*(?P<unit>к|k|тыс|тис|тысяч|тисяч|грн|uah|usd|\$|€))?"
         for match in re.finditer(pattern, text.casefold()):
-            raw = match.group("value").strip()
-            cleaned = raw.replace(" ", "").replace(",", ".")
+            raw = match.group("value").strip().replace(" ", "").replace(",", ".")
             try:
-                value = Decimal(cleaned)
+                value = Decimal(raw)
             except InvalidOperation:
                 continue
             unit = match.group("unit") or ""
             if value < 1000 and unit in {"к", "k", "тыс", "тис", "тысяч", "тисяч"}:
                 value *= 1000
-            if Decimal("1000") <= value <= Decimal("10000000"):
-                values.append(value)
-                if match.group("prefix"):
-                    minimum_marked = True
-        return values, minimum_marked
+            if not (Decimal("1000") <= value <= Decimal("10000000")):
+                continue
+            values.append(value)
+            if unit in {"грн", "uah"} or "грн" in text.casefold():
+                currency = "UAH"
+            elif unit in {"usd", "$"}:
+                currency = "USD"
+            elif unit == "€":
+                currency = "EUR"
+
+        if not values:
+            return None, None, None
+        # A dash between two salary values means a range; otherwise the first
+        # meaningful value is treated as the minimum advertised salary.
+        if len(values) >= 2 and re.search(r"\d\s*[-–—]\s*\d", text):
+            return min(values), max(values), currency or "UAH"
+        return min(values), None, currency or "UAH"
+
+    @staticmethod
+    def _extract_city(text: str) -> str | None:
+        normalized = text.casefold()
+        for city in ("киев", "київ", "kyiv", "кривой рог", "львов", "львів", "одесса", "одеса", "днепр", "дніпро", "харьков", "харків"):
+            if city in normalized:
+                return city.title()
+        return None
 
     @staticmethod
     def _extract_employment_type(text: str) -> EmploymentType:
