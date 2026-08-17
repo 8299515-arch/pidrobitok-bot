@@ -1,3 +1,5 @@
+import asyncio
+
 from google import genai
 from google.genai import types
 import httpx
@@ -9,6 +11,8 @@ from app.tools.job_aggregator import JobAggregator
 from app.tools.job_pipeline import JobPipeline
 from app.tools.job_ranker import JobRanker
 from app.tools.jobs import JobSearchTool
+from app.tools.olx import OlxJobSource
+from app.tools.telegram_jobs import TelegramJobSource
 
 
 class CareerAgent:
@@ -17,7 +21,7 @@ class CareerAgent:
         "Помогай пользователю искать работу, анализировать вакансии и карьерные возможности. "
         "Отвечай на русском языке, если пользователь не просит другой язык. "
         "Не выдумывай вакансии, зарплаты, компании или ссылки. "
-        "Если пользователь просит актуальные вакансии, используй доступный инструмент поиска. "
+        "Если пользователь просит актуальные вакансии, используй доступные источники поиска. "
         "Учитывай сохранённый профиль кандидата, если он есть."
     )
 
@@ -26,7 +30,12 @@ class CareerAgent:
         self._model = settings.ai_model
         self._memory = ConversationMemory(settings.max_history_messages)
         self._profiles = CandidateProfileStore()
-        self._job_source = JobSearchTool()
+        self._source_limit = settings.job_source_limit
+        self._job_sources = (
+            JobSearchTool(),
+            OlxJobSource(),
+            TelegramJobSource(settings.telegram_job_channels),
+        )
         self._job_pipeline = JobPipeline(JobAggregator(), JobRanker())
 
     async def respond(self, user_id: int, text: str) -> str:
@@ -46,22 +55,22 @@ class CareerAgent:
         profile = self._profiles.get(user_id)
         query = self._build_job_query(text, profile)
         location = profile.city
-
-        try:
-            jobs = await self._job_source.search(query=query, location=location, limit=20)
-            ranked_jobs = self._job_pipeline.run([jobs], profile, limit=10)
-        except httpx.HTTPError:
-            return "Источник вакансий временно недоступен. Попробуй ещё раз через несколько минут."
-        except Exception:
-            return "Не удалось получить актуальные вакансии. Попробуй ещё раз через несколько минут."
+        source_results = await asyncio.gather(
+            *(
+                self._safe_source_search(source, query=query, location=location)
+                for source in self._job_sources
+            )
+        )
+        ranked_jobs = self._job_pipeline.run(source_results, profile, limit=self._source_limit)
 
         if not ranked_jobs:
-            return "По текущему источнику подходящих вакансий не найдено."
+            return "По доступным источникам подходящих вакансий не найдено."
 
         lines = [f"🔎 Лучшие вакансии по запросу: {query}", ""]
         for index, ranked in enumerate(ranked_jobs, start=1):
             job = ranked.job
             lines.append(f"{index}. {job.title} — совпадение {ranked.score}%")
+            lines.append(f"   Источник: {job.source.value}")
             if job.city:
                 lines.append(f"   📍 {job.city}")
             if job.salary_min is not None:
@@ -75,6 +84,16 @@ class CareerAgent:
             lines.append("")
 
         return "\n".join(lines).strip()
+
+    @staticmethod
+    async def _safe_source_search(source: object, *, query: str, location: str | None) -> list:
+        try:
+            search = getattr(source, "search")
+            return list(await search(query, location=location, limit=10))
+        except (httpx.HTTPError, TimeoutError):
+            return []
+        except Exception:
+            return []
 
     async def _ask_model(self, user_id: int) -> str:
         history = self._memory.history(user_id)
