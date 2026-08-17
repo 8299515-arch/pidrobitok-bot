@@ -3,7 +3,7 @@ from google.genai import types
 
 from app.config import Settings
 from app.memory import ConversationMemory
-from app.profile import CandidateProfileStore
+from app.profile import CandidateProfile, CandidateProfileStore
 from app.tools.jobs import JobSearchTool
 
 
@@ -78,20 +78,25 @@ class CareerAgent:
         return text or "Не удалось сформировать ответ. Попробуй сформулировать запрос иначе."
 
     @staticmethod
-    def _build_job_query(text: str, profile: object) -> str:
+    def _build_job_query(text: str, profile: CandidateProfile) -> str:
         normalized = text.casefold()
         parts: list[str] = []
 
-        for skill in ("python", "django", "fastapi", "flask", "javascript", "typescript", "react", "flutter", "java", "c++"):
+        for skill in (
+            "python", "django", "fastapi", "flask", "javascript", "typescript",
+            "react", "flutter", "java", "c++",
+        ):
             if skill in normalized:
                 parts.append(skill)
 
-        if getattr(profile, "city", None):
-            parts.append(str(profile.city))
+        if profile.city:
+            parts.append(profile.city)
         elif "киев" in normalized or "київ" in normalized:
             parts.append("kyiv")
 
-        if getattr(profile, "remote", False) or "remote" in normalized or "удален" in normalized or "удалён" in normalized:
+        if profile.remote or any(
+            phrase in normalized for phrase in ("remote", "удален", "удалён", "дистанцион")
+        ):
             parts.append("remote")
 
         return " ".join(dict.fromkeys(parts)) or "python kyiv"
