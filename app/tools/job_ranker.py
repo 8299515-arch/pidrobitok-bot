@@ -58,14 +58,7 @@ class JobRanker:
 
     @staticmethod
     def _has_explicit_constraints(query: JobQuery) -> bool:
-        return bool(
-            query.skills
-            or query.city
-            or query.remote is True
-            or query.salary_min is not None
-            or query.salary_max is not None
-            or query.employment
-        )
+        return bool(query.skills or query.city or query.remote is True or query.salary_min is not None or query.salary_max is not None or query.employment)
 
     def _query_score(self, job: Job, query: JobQuery | None) -> tuple[int, list[str]]:
         if query is None:
@@ -171,4 +164,5 @@ class JobRanker:
 
     @staticmethod
     def _salary_matches(job: Job, minimum: Decimal) -> bool:
-        return job.salary_max is not None and job.salary_max >= minimum
+        advertised_upper = job.salary_max if job.salary_max is not None else job.salary_min
+        return advertised_upper is not None and advertised_upper >= minimum
