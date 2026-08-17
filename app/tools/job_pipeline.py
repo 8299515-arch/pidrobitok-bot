@@ -3,13 +3,13 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from app.domain.jobs import Job
-from app.memory.profile import CandidateProfile
+from app.profile import CandidateProfile
 from app.tools.job_aggregator import JobAggregator
 from app.tools.job_ranker import JobRanker, RankedJob
 
 
 class JobPipeline:
-    """Normalizes the common aggregation/ranking flow shared by all sources."""
+    """Runs the common aggregation and candidate-ranking flow."""
 
     def __init__(self, aggregator: JobAggregator, ranker: JobRanker) -> None:
         self._aggregator = aggregator
