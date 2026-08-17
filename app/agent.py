@@ -117,11 +117,17 @@ class CareerAgent:
 
     @staticmethod
     def _build_job_query(parsed: JobQuery, profile: object) -> str:
-        parts = list(parsed.skills) or list(getattr(profile, "skills", ()))
-        city = parsed.city or getattr(profile, "city", None)
+        """Build a source query from explicit user constraints only.
+
+        Candidate profile skills are intentionally not injected into the source
+        query when the user did not request a specific skill. The profile still
+        participates in ranking, but must not narrow a generic search.
+        """
+        parts = list(parsed.skills)
+        city = parsed.city
         if city:
             parts.append(city)
-        if parsed.remote is True or getattr(profile, "remote", False):
+        if parsed.remote is True:
             parts.append("remote")
         return " ".join(dict.fromkeys(part for part in parts if part)) or "вакансии"
 
