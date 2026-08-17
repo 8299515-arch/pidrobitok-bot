@@ -5,6 +5,9 @@ import httpx
 from app.config import Settings
 from app.memory import ConversationMemory
 from app.profile import CandidateProfile, CandidateProfileStore
+from app.tools.job_aggregator import JobAggregator
+from app.tools.job_pipeline import JobPipeline
+from app.tools.job_ranker import JobRanker
 from app.tools.jobs import JobSearchTool
 
 
@@ -23,7 +26,8 @@ class CareerAgent:
         self._model = settings.ai_model
         self._memory = ConversationMemory(settings.max_history_messages)
         self._profiles = CandidateProfileStore()
-        self._jobs = JobSearchTool()
+        self._job_source = JobSearchTool()
+        self._job_pipeline = JobPipeline(JobAggregator(), JobRanker())
 
     async def respond(self, user_id: int, text: str) -> str:
         self._memory.add(user_id, "user", text)
@@ -41,25 +45,32 @@ class CareerAgent:
     async def _search_jobs(self, user_id: int, text: str) -> str:
         profile = self._profiles.get(user_id)
         query = self._build_job_query(text, profile)
+        location = profile.city
 
         try:
-            jobs = await self._jobs.search(query=query)
+            jobs = await self._job_source.search(query=query, location=location, limit=20)
+            ranked_jobs = self._job_pipeline.run([jobs], profile, limit=10)
         except httpx.HTTPError:
             return "Источник вакансий временно недоступен. Попробуй ещё раз через несколько минут."
         except Exception:
             return "Не удалось получить актуальные вакансии. Попробуй ещё раз через несколько минут."
 
-        if not jobs:
+        if not ranked_jobs:
             return "По текущему источнику подходящих вакансий не найдено."
 
-        lines = [f"🔎 Вакансии по запросу: {query}", ""]
-        for index, job in enumerate(jobs, start=1):
-            lines.append(f"{index}. {job.title}")
-            lines.append(f"   Источник: {job.source}")
-            if job.location:
-                lines.append(f"   📍 {job.location}")
-            if job.salary:
-                lines.append(f"   💰 {job.salary}")
+        lines = [f"🔎 Лучшие вакансии по запросу: {query}", ""]
+        for index, ranked in enumerate(ranked_jobs, start=1):
+            job = ranked.job
+            lines.append(f"{index}. {job.title} — совпадение {ranked.score}%")
+            if job.city:
+                lines.append(f"   📍 {job.city}")
+            if job.salary_min is not None:
+                salary = self._format_salary(job.salary_min, job.salary_max, job.currency)
+                lines.append(f"   💰 {salary}")
+            if job.remote is True:
+                lines.append("   🏠 Удалённая работа")
+            if ranked.reasons:
+                lines.append(f"   ✓ {'; '.join(ranked.reasons)}")
             lines.append(f"   🔗 {job.url}")
             lines.append("")
 
@@ -108,6 +119,13 @@ class CareerAgent:
             parts.append("remote")
 
         return " ".join(dict.fromkeys(parts)) or "python kyiv"
+
+    @staticmethod
+    def _format_salary(minimum: object, maximum: object | None, currency: str | None) -> str:
+        currency_label = currency or ""
+        if maximum is None or minimum == maximum:
+            return f"{minimum} {currency_label}".strip()
+        return f"{minimum}–{maximum} {currency_label}".strip()
 
     @staticmethod
     def _looks_like_job_search(text: str) -> bool:
