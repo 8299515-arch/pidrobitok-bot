@@ -31,7 +31,7 @@ class CandidateProfileStore:
                 skills.append(skill)
 
         city = current.city
-        for candidate_city in ("киев", "киев", "львов", "одесса", "днепр", "харьков"):
+        for candidate_city in ("киев", "київ", "львов", "одесса", "днепр", "харьков"):
             if candidate_city in normalized:
                 city = candidate_city
                 break
