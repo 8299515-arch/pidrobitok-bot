@@ -1,4 +1,5 @@
 from google import genai
+from google.genai import types
 
 from app.config import Settings
 from app.memory import ConversationMemory
@@ -52,14 +53,19 @@ class CareerAgent:
     async def _ask_model(self, user_id: int) -> str:
         history = self._memory.history(user_id)
         contents = [
-            {"role": message.role, "parts": [{"text": message.content}]}
+            types.Content(
+                role=message.role,
+                parts=[types.Part(text=message.content)],
+            )
             for message in history
         ]
 
         response = await self._client.aio.models.generate_content(
             model=self._model,
             contents=contents,
-            config={"system_instruction": self._system_instruction},
+            config=types.GenerateContentConfig(
+                system_instruction=self._system_instruction,
+            ),
         )
         text = (response.text or "").strip()
         return text or "Не удалось сформировать ответ. Попробуй сформулировать запрос иначе."
