@@ -6,18 +6,37 @@ from app.domain.jobs import Job
 
 
 class JobAggregator:
-    """Combines source results and removes duplicates without losing source priority."""
+    """Combines source results and removes exact and cross-source duplicates."""
 
     def aggregate(self, results: Iterable[Iterable[Job]]) -> list[Job]:
         unique: dict[str, Job] = {}
         for source_jobs in results:
             for job in source_jobs:
-                key = job.deduplication_key
-                if key not in unique:
-                    unique[key] = job
+                keys = (f"url:{job.canonical_url}", f"fingerprint:{job.fingerprint}")
+                existing_key = next((key for key in keys if key in unique), None)
+                if existing_key is None:
+                    unique[keys[0]] = job
+                    unique[keys[1]] = job
                     continue
-                unique[key] = self._prefer_richer_job(unique[key], job)
-        return list(unique.values())
+
+                current = unique[existing_key]
+                preferred = self._prefer_richer_job(current, job)
+                for key in keys:
+                    unique[key] = preferred
+
+        return self._unique_values(unique)
+
+    @staticmethod
+    def _unique_values(values: dict[str, Job]) -> list[Job]:
+        result: list[Job] = []
+        seen: set[int] = set()
+        for job in values.values():
+            marker = id(job)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            result.append(job)
+        return result
 
     @staticmethod
     def _prefer_richer_job(first: Job, second: Job) -> Job:
