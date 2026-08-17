@@ -18,6 +18,7 @@ class Settings:
     job_source_limit: int = 10
     database_path: str = "data/pidrobitok.sqlite3"
     monitor_poll_seconds: int = 60
+    admin_user_ids: tuple[int, ...] = ()
 
     @classmethod
     def from_environment(cls) -> "Settings":
@@ -45,6 +46,12 @@ class Settings:
         if not database_path:
             raise RuntimeError("DATABASE_PATH must not be empty")
 
+        raw_admin_ids = os.getenv("ADMIN_USER_IDS", "")
+        try:
+            admin_user_ids = tuple(int(value.strip()) for value in raw_admin_ids.split(",") if value.strip())
+        except ValueError as exc:
+            raise RuntimeError("ADMIN_USER_IDS must contain Telegram numeric user IDs") from exc
+
         return cls(
             bot_token=bot_token,
             google_api_key=google_api_key,
@@ -53,4 +60,5 @@ class Settings:
             job_source_limit=job_source_limit,
             database_path=database_path,
             monitor_poll_seconds=monitor_poll_seconds,
+            admin_user_ids=admin_user_ids,
         )
