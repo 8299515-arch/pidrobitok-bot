@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 
@@ -40,10 +40,16 @@ class SQLiteStorage:
                     query TEXT NOT NULL,
                     interval_minutes INTEGER NOT NULL,
                     enabled INTEGER NOT NULL DEFAULT 1,
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    last_checked_at TEXT
                 )
                 """
             )
+            columns = {
+                str(row[1]) for row in self._connection.execute("PRAGMA table_info(saved_searches)").fetchall()
+            }
+            if "last_checked_at" not in columns:
+                self._connection.execute("ALTER TABLE saved_searches ADD COLUMN last_checked_at TEXT")
             self._connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS search_deliveries (
@@ -67,14 +73,7 @@ class SQLiteStorage:
         skills = tuple(skill for skill in row["skills"].split(",") if skill)
         return skills, row["city"], row["salary_min"], bool(row["remote"])
 
-    def save_profile(
-        self,
-        user_id: int,
-        skills: tuple[str, ...],
-        city: str | None,
-        salary_min: int | None,
-        remote: bool,
-    ) -> None:
+    def save_profile(self, user_id: int, skills: tuple[str, ...], city: str | None, salary_min: int | None, remote: bool) -> None:
         with self._lock, self._connection:
             self._connection.execute(
                 """
@@ -114,9 +113,34 @@ class SQLiteStorage:
     def list_active_saved_searches(self) -> list[SavedSearch]:
         with self._lock:
             rows = self._connection.execute(
-                "SELECT id, user_id, query, interval_minutes, enabled, created_at FROM saved_searches WHERE enabled = 1 ORDER BY id",
+                "SELECT id, user_id, query, interval_minutes, enabled, created_at FROM saved_searches WHERE enabled = 1 ORDER BY id"
             ).fetchall()
         return [self._saved_search_from_row(row) for row in rows]
+
+    def mark_saved_search_checked(self, search_id: int) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock, self._connection:
+            self._connection.execute(
+                "UPDATE saved_searches SET last_checked_at = ? WHERE id = ?",
+                (now, search_id),
+            )
+
+    def saved_search_due(self, search: SavedSearch) -> bool:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT last_checked_at FROM saved_searches WHERE id = ?",
+                (search.search_id,),
+            ).fetchone()
+        if row is None or row["last_checked_at"] is None:
+            return True
+        try:
+            last_checked = datetime.fromisoformat(str(row["last_checked_at"]))
+        except ValueError:
+            return True
+        if last_checked.tzinfo is None:
+            last_checked = last_checked.replace(tzinfo=timezone.utc)
+        elapsed = datetime.now(timezone.utc) - last_checked
+        return elapsed.total_seconds() >= search.interval_minutes * 60
 
     def delete_saved_search(self, user_id: int, search_id: int) -> bool:
         with self._lock, self._connection:
