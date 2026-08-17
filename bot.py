@@ -30,14 +30,44 @@ keyboard = ReplyKeyboardMarkup(
 )
 
 
+def _split_message(text: str, limit: int = 3900) -> list[str]:
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    current = ""
+    for block in text.split("\n\n"):
+        candidate = f"{current}\n\n{block}".strip() if current else block
+        if len(candidate) <= limit:
+            current = candidate
+            continue
+        if current:
+            chunks.append(current)
+        while len(block) > limit:
+            chunks.append(block[:limit])
+            block = block[limit:]
+        current = block
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+async def _reply(update: Update, text: str) -> None:
+    if update.message is None:
+        return
+    for chunk in _split_message(text):
+        await update.message.reply_text(chunk, disable_web_page_preview=True)
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message is None:
         return
 
     await update.message.reply_text(
         "🚀 Pidrobitok AI Agent\n\n"
-        "Я могу искать вакансии и помогать с карьерой. "
+        "Я могу искать вакансии, анализировать их и помогать с карьерой. "
         "Напиши запрос обычным языком.\n\n"
+        "Пример:\n"
+        "Python/FastAPI, Киев или удалённо, от 60000 грн, full-time\n\n"
         "Для автоматического мониторинга: /watch запрос | интервал_минут\n"
         "Например: /watch Python Киев от 60000 | 60\n"
         "/watches — мои мониторинги\n"
@@ -54,6 +84,9 @@ async def watch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("Формат: /watch Python Киев от 60000 | 60")
         return
     query, interval_text = (part.strip() for part in raw.split("|", 1))
+    if not query:
+        await update.message.reply_text("Запрос для мониторинга не может быть пустым.")
+        return
     try:
         interval = int(interval_text)
         saved = saved_searches.create(update.effective_user.id, query, interval)
@@ -78,12 +111,13 @@ async def watches(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     for item in items:
         status = "активен" if item.enabled else "выключен"
         lines.append(f"#{item.search_id} — {item.query} — каждые {item.interval_minutes} мин. — {status}")
-    await update.message.reply_text("\n".join(lines))
+    await _reply(update, "\n".join(lines))
 
 
 async def unwatch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message is None or update.effective_user is None or not context.args:
-        await update.message.reply_text("Формат: /unwatch ID")
+        if update.message is not None:
+            await update.message.reply_text("Формат: /unwatch ID")
         return
     try:
         search_id = int(context.args[0])
@@ -118,7 +152,7 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.exception("Agent request failed for user %s", user_id)
         answer = "Произошла внутренняя ошибка. Попробуй ещё раз через минуту."
 
-    await update.message.reply_text(answer)
+    await _reply(update, answer)
 
 
 async def post_init(application: Application) -> None:
