@@ -9,34 +9,30 @@ class JobAggregator:
     """Combines source results and removes exact and cross-source duplicates."""
 
     def aggregate(self, results: Iterable[Iterable[Job]]) -> list[Job]:
-        unique: dict[str, Job] = {}
+        jobs: list[Job] = []
+        aliases: dict[str, int] = {}
+
         for source_jobs in results:
             for job in source_jobs:
                 keys = (f"url:{job.canonical_url}", f"fingerprint:{job.fingerprint}")
-                existing_key = next((key for key in keys if key in unique), None)
-                if existing_key is None:
-                    unique[keys[0]] = job
-                    unique[keys[1]] = job
+                existing_index = next((aliases[key] for key in keys if key in aliases), None)
+                if existing_index is None:
+                    aliases[keys[0]] = len(jobs)
+                    aliases[keys[1]] = len(jobs)
+                    jobs.append(job)
                     continue
 
-                current = unique[existing_key]
+                current = jobs[existing_index]
                 preferred = self._prefer_richer_job(current, job)
-                for key in keys:
-                    unique[key] = preferred
+                jobs[existing_index] = preferred
 
-        return self._unique_values(unique)
+                for alias, index in list(aliases.items()):
+                    if index == existing_index:
+                        aliases[alias] = existing_index
+                aliases[keys[0]] = existing_index
+                aliases[keys[1]] = existing_index
 
-    @staticmethod
-    def _unique_values(values: dict[str, Job]) -> list[Job]:
-        result: list[Job] = []
-        seen: set[int] = set()
-        for job in values.values():
-            marker = id(job)
-            if marker in seen:
-                continue
-            seen.add(marker)
-            result.append(job)
-        return result
+        return jobs
 
     @staticmethod
     def _prefer_richer_job(first: Job, second: Job) -> Job:
