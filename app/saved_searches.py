@@ -44,6 +44,9 @@ class SavedSearchStore:
     def mark_checked(self, search_id: int) -> None:
         self._storage.mark_saved_search_checked(search_id)
 
+    def has_deliveries(self, search_id: int) -> bool:
+        return self._storage.has_search_deliveries(search_id)
+
     def was_delivered(self, search_id: int, job_url: str) -> bool:
         return self._storage.was_search_job_delivered(search_id, job_url)
 
