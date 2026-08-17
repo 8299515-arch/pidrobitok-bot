@@ -14,11 +14,28 @@ class RankedJob:
 
 
 class JobRanker:
-    """Deterministic first-pass ranking; AI can enrich explanations later."""
+    """Deterministic ranking with hard eligibility filters before scoring."""
 
     def rank(self, jobs: list[Job], profile: CandidateProfile) -> list[RankedJob]:
-        ranked = [self._score(job, profile) for job in jobs]
+        ranked = []
+        for job in jobs:
+            if not self._eligible(job, profile):
+                continue
+            ranked.append(self._score(job, profile))
         return sorted(ranked, key=lambda item: (-item.score, item.job.title.casefold()))
+
+    @staticmethod
+    def _eligible(job: Job, profile: CandidateProfile) -> bool:
+        if profile.city and job.city and profile.city.casefold() not in job.city.casefold():
+            if profile.remote and job.remote is True:
+                return True
+            return False
+        if profile.salary_min is not None and job.salary_max is not None:
+            if job.salary_max < profile.salary_min:
+                return False
+        if profile.remote and job.remote is False:
+            return False
+        return True
 
     def _score(self, job: Job, profile: CandidateProfile) -> RankedJob:
         score = 0
@@ -30,15 +47,17 @@ class JobRanker:
         skills = [skill.strip().casefold() for skill in profile.skills if skill.strip()]
         matches = [skill for skill in skills if skill in haystack]
         if matches:
-            score += min(50, len(matches) * 10)
+            score += min(55, len(matches) * 11)
             reasons.append(f"Совпадают навыки: {', '.join(matches[:5])}")
+        elif skills:
+            reasons.append("Совпадение навыков не найдено")
 
         if profile.city and job.city and profile.city.casefold() in job.city.casefold():
             score += 20
             reasons.append("Совпадает город")
 
         if profile.remote and job.remote is True:
-            score += 20
+            score += 15
             reasons.append("Подходит удалённая работа")
 
         if profile.salary_min is not None and job.salary_max is not None:
