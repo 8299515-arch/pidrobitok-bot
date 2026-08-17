@@ -20,6 +20,13 @@ class RankedJob:
 class JobRanker:
     """Deterministic ranking with separate query and candidate compatibility scores."""
 
+    _SKILLS_WEIGHT = 40
+    _TITLE_WEIGHT = 25
+    _CITY_WEIGHT = 15
+    _SALARY_WEIGHT = 10
+    _REMOTE_WEIGHT = 5
+    _EMPLOYMENT_WEIGHT = 5
+
     def rank(self, jobs: list[Job], profile: CandidateProfile, query: JobQuery | None = None) -> list[RankedJob]:
         ranked = [self._score(job, profile, query) for job in jobs]
         return sorted(ranked, key=lambda item: (-item.score, item.job.title.casefold()))
@@ -37,16 +44,14 @@ class JobRanker:
 
         reasons = list(query_reasons)
         if candidate_score is not None:
-            profile_reasons = self._candidate_reasons(job, profile)
-            reasons.extend(profile_reasons)
-
+            reasons.extend(self._candidate_reasons(job, profile))
         if not reasons:
             reasons.append("Подходит по заданным условиям")
 
         return RankedJob(
             job=job,
             score=min(score, 100),
-            reasons=tuple(reasons),
+            reasons=tuple(dict.fromkeys(reasons)),
             query_score=query_score,
             candidate_score=candidate_score,
         )
@@ -113,35 +118,46 @@ class JobRanker:
         return round((matched / criteria) * 100), reasons
 
     def _candidate_score(self, job: Job, profile: CandidateProfile) -> int | None:
-        criteria = 0
-        matched = 0
-        haystack = " ".join(part for part in (job.title, job.company, job.city, job.description) if part).casefold()
+        weighted_total = 0
+        weighted_match = 0
+        haystack = " ".join(part for part in (job.title, job.company, job.description) if part).casefold()
 
         if profile.skills:
-            criteria += 1
-            if any(skill.casefold() in haystack for skill in profile.skills):
-                matched += 1
+            weighted_total += self._SKILLS_WEIGHT
+            matches = [skill for skill in profile.skills if skill.casefold() in haystack]
+            if matches:
+                weighted_match += self._SKILLS_WEIGHT * len(matches) / len(profile.skills)
+
+        if profile.skills:
+            weighted_total += self._TITLE_WEIGHT
+            if any(skill.casefold() in (job.title or "").casefold() for skill in profile.skills):
+                weighted_match += self._TITLE_WEIGHT
 
         if profile.city:
-            criteria += 1
+            weighted_total += self._CITY_WEIGHT
             if job.city and profile.city.casefold() in job.city.casefold():
-                matched += 1
-
-        if profile.remote:
-            criteria += 1
-            if job.remote is True:
-                matched += 1
+                weighted_match += self._CITY_WEIGHT
 
         if profile.salary_min is not None:
-            criteria += 1
+            weighted_total += self._SALARY_WEIGHT
             if self._salary_matches(job, profile.salary_min):
-                matched += 1
+                weighted_match += self._SALARY_WEIGHT
 
-        return round((matched / criteria) * 100) if criteria else None
+        if profile.remote:
+            weighted_total += self._REMOTE_WEIGHT
+            if job.remote is True:
+                weighted_match += self._REMOTE_WEIGHT
+
+        if profile.skills or profile.city or profile.salary_min is not None or profile.remote:
+            weighted_total += self._EMPLOYMENT_WEIGHT
+            if job.employment_type.value != "unknown":
+                weighted_match += self._EMPLOYMENT_WEIGHT
+
+        return round((weighted_match / weighted_total) * 100) if weighted_total else None
 
     @staticmethod
     def _candidate_reasons(job: Job, profile: CandidateProfile) -> list[str]:
-        haystack = " ".join(part for part in (job.title, job.company, job.city, job.description) if part).casefold()
+        haystack = " ".join(part for part in (job.title, job.company, job.description) if part).casefold()
         reasons: list[str] = []
         matches = [skill for skill in profile.skills if skill.casefold() in haystack]
         if matches:
