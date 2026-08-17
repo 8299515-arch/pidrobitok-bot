@@ -54,7 +54,7 @@ class CareerAgent:
         query = self._build_job_query(parsed, profile)
         location = parsed.city or profile.city
         source_results = await asyncio.gather(
-            *(self._safe_source_search(source, query=query, location=location) for source in self._job_sources)
+            *(self._safe_source_search(source, query=query, location=location, limit=self._source_limit) for source in self._job_sources)
         )
         return self._job_pipeline.run(source_results, profile, query=parsed, limit=self._source_limit)
 
@@ -90,9 +90,9 @@ class CareerAgent:
         return "\n".join(lines)
 
     @staticmethod
-    async def _safe_source_search(source: object, *, query: str, location: str | None) -> list:
+    async def _safe_source_search(source: object, *, query: str, location: str | None, limit: int) -> list:
         try:
-            return list(await getattr(source, "search")(query, location=location, limit=10))
+            return list(await getattr(source, "search")(query, location=location, limit=limit))
         except (httpx.HTTPError, TimeoutError):
             return []
         except Exception:
