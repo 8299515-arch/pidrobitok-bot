@@ -43,6 +43,8 @@ class CareerAgent:
 
         try:
             jobs = await self._jobs.search(query=query)
+        except httpx.HTTPError:
+            return "Источник вакансий временно недоступен. Попробуй ещё раз через несколько минут."
         except Exception:
             return "Не удалось получить актуальные вакансии. Попробуй ещё раз через несколько минут."
 
@@ -53,9 +55,14 @@ class CareerAgent:
         for index, job in enumerate(jobs, start=1):
             lines.append(f"{index}. {job.title}")
             lines.append(f"   Источник: {job.source}")
-            lines.append(f"   {job.url}")
+            if job.location:
+                lines.append(f"   📍 {job.location}")
+            if job.salary:
+                lines.append(f"   💰 {job.salary}")
+            lines.append(f"   🔗 {job.url}")
+            lines.append("")
 
-        return "\n".join(lines)
+        return "\n".join(lines).strip()
 
     async def _ask_model(self, user_id: int) -> str:
         history = self._memory.history(user_id)
