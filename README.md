@@ -58,11 +58,21 @@ python bot.py
 Обязательные:
 
 ```text
-TELEGRAM_BOT_TOKEN=...
-GEMINI_API_KEY=...
+BOT_TOKEN=...
+GOOGLE_API_KEY=...
 ```
 
-Остальные параметры имеют безопасные значения по умолчанию. Локальная SQLite БД не должна коммититься в Git.
+Дополнительные:
+
+```text
+AI_MODEL=gemini-3.6-flash
+TELEGRAM_JOB_CHANNELS=@example_channel,@another_channel
+JOB_SOURCE_LIMIT=10
+DATABASE_PATH=data/pidrobitok.sqlite3
+MONITOR_POLL_SECONDS=60
+```
+
+Локальная SQLite БД не должна коммититься в Git.
 
 ## Команды
 
