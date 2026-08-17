@@ -10,7 +10,7 @@ from app.profile import CandidateProfileStore
 from app.storage import SQLiteStorage
 from app.tools.job_aggregator import JobAggregator
 from app.tools.job_pipeline import JobPipeline
-from app.tools.job_ranker import JobRanker
+from app.tools.job_ranker import JobRanker, RankedJob
 from app.tools.jobs import JobSearchTool
 from app.tools.olx import OlxJobSource
 from app.tools.telegram_jobs import TelegramJobSource
@@ -53,7 +53,7 @@ class CareerAgent:
         self._memory.add(user_id, "assistant", answer)
         return answer
 
-    async def _search_jobs(self, user_id: int, text: str) -> str:
+    async def search_ranked_jobs(self, user_id: int, text: str) -> list[RankedJob]:
         profile = self._profiles.get(user_id)
         query = self._build_job_query(text, profile)
         location = profile.city
@@ -63,29 +63,35 @@ class CareerAgent:
                 for source in self._job_sources
             )
         )
-        ranked_jobs = self._job_pipeline.run(source_results, profile, limit=self._source_limit)
+        return self._job_pipeline.run(source_results, profile, limit=self._source_limit)
 
+    async def _search_jobs(self, user_id: int, text: str) -> str:
+        ranked_jobs = await self.search_ranked_jobs(user_id, text)
         if not ranked_jobs:
             return "По доступным источникам подходящих вакансий не найдено."
 
-        lines = [f"🔎 Лучшие вакансии по запросу: {query}", ""]
+        lines = [f"🔎 Лучшие вакансии по запросу: {self._build_job_query(text, self._profiles.get(user_id))}", ""]
         for index, ranked in enumerate(ranked_jobs, start=1):
-            job = ranked.job
-            lines.append(f"{index}. {job.title} — совпадение {ranked.score}%")
-            lines.append(f"   Источник: {job.source.value}")
-            if job.city:
-                lines.append(f"   📍 {job.city}")
-            if job.salary_min is not None:
-                salary = self._format_salary(job.salary_min, job.salary_max, job.currency)
-                lines.append(f"   💰 {salary}")
-            if job.remote is True:
-                lines.append("   🏠 Удалённая работа")
-            if ranked.reasons:
-                lines.append(f"   ✓ {'; '.join(ranked.reasons)}")
-            lines.append(f"   🔗 {job.url}")
+            lines.append(self.format_ranked_job(ranked, index=index))
             lines.append("")
-
         return "\n".join(lines).strip()
+
+    @staticmethod
+    def format_ranked_job(ranked: RankedJob, index: int | None = None) -> str:
+        job = ranked.job
+        prefix = f"{index}. " if index is not None else ""
+        lines = [f"{prefix}{job.title} — совпадение {ranked.score}%", f"   Источник: {job.source.value}"]
+        if job.city:
+            lines.append(f"   📍 {job.city}")
+        if job.salary_min is not None:
+            salary = CareerAgent._format_salary(job.salary_min, job.salary_max, job.currency)
+            lines.append(f"   💰 {salary}")
+        if job.remote is True:
+            lines.append("   🏠 Удалённая работа")
+        if ranked.reasons:
+            lines.append(f"   ✓ {'; '.join(ranked.reasons)}")
+        lines.append(f"   🔗 {job.url}")
+        return "\n".join(lines)
 
     @staticmethod
     async def _safe_source_search(source: object, *, query: str, location: str | None) -> list:
