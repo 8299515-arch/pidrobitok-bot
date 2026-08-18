@@ -31,13 +31,11 @@ class JobPipeline:
 
     @staticmethod
     def _filter(jobs: list[Job], profile: CandidateProfile, query: JobQuery | None) -> list[Job]:
-        if query is None:
-            return jobs
         result: list[Job] = []
-        requested_city = query.city or profile.city
-        requested_min = query.salary_min or profile.salary_min
-        requested_remote = query.remote is True or profile.remote
-        requested_skills = set(query.skills)
+        requested_city = (query.city if query is not None else None) or profile.city
+        requested_min = (query.salary_min if query is not None else None) or profile.salary_min
+        requested_remote = (query.remote is True if query is not None else False) or profile.remote
+        requested_skills = set(query.skills) if query is not None else set()
         for job in jobs:
             if requested_city:
                 if not job.city or (requested_city.casefold() not in job.city.casefold() and job.remote is not True):
@@ -51,10 +49,10 @@ class JobPipeline:
                 advertised_upper = job.salary_max if job.salary_max is not None else job.salary_min
                 if advertised_upper is None or advertised_upper < requested_min:
                     continue
-            if query.salary_max is not None:
+            if query is not None and query.salary_max is not None:
                 if job.salary_min is None or job.salary_min > query.salary_max:
                     continue
-            if query.employment and job.employment_type.value != query.employment:
+            if query is not None and query.employment and job.employment_type.value != query.employment:
                 continue
             if requested_skills:
                 haystack = " ".join(part for part in (job.title, job.description) if part).casefold()

@@ -83,6 +83,11 @@ MONITOR_POLL_SECONDS=60
 /watch <запрос> | <интервал_в_минутах>
 /watches
 /unwatch <id>
+/admin
+/admin channels
+/admin add_channel @channel
+/admin remove_channel @channel
+/admin enable_channel @channel
 ```
 
 Пример:

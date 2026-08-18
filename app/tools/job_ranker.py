@@ -28,7 +28,8 @@ class JobRanker:
     _EMPLOYMENT_WEIGHT = 5
 
     def rank(self, jobs: list[Job], profile: CandidateProfile, query: JobQuery | None = None) -> list[RankedJob]:
-        ranked = [self._score(job, profile, query) for job in jobs]
+        filtered = [job for job in jobs if self._matches_profile_requirements(job, profile)]
+        ranked = [self._score(job, profile, query) for job in filtered]
         return sorted(ranked, key=lambda item: (-item.score, item.job.title.casefold()))
 
     def _score(self, job: Job, profile: CandidateProfile, query: JobQuery | None) -> RankedJob:
@@ -146,6 +147,17 @@ class JobRanker:
                 weighted_match += self._EMPLOYMENT_WEIGHT
 
         return round((weighted_match / weighted_total) * 100) if weighted_total else None
+
+    @staticmethod
+    def _matches_profile_requirements(job: Job, profile: CandidateProfile) -> bool:
+        if profile.city:
+            if not job.city or (profile.city.casefold() not in job.city.casefold() and job.remote is not True):
+                return False
+        if profile.remote and job.remote is not True:
+            return False
+        if profile.salary_min is not None and not JobRanker._salary_matches(job, profile.salary_min):
+            return False
+        return True
 
     @staticmethod
     def _candidate_reasons(job: Job, profile: CandidateProfile) -> list[str]:

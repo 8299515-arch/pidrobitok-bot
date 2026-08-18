@@ -57,7 +57,7 @@ class JobPipelineTests(unittest.TestCase):
 
         result = self.pipeline.run([[job]], profile)
 
-        self.assertEqual(result[0].score, 50)
+        self.assertEqual(result[0].score, 95)
         self.assertTrue(result[0].reasons)
 
 

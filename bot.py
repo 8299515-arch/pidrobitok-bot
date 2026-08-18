@@ -18,8 +18,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 settings = Settings.from_environment()
-agent = CareerAgent(settings)
 storage = SQLiteStorage(settings.database_path)
+storage.seed_telegram_channels(settings.telegram_job_channels)
+agent = CareerAgent(settings)
 saved_searches = SavedSearchStore(storage)
 admin_service = AdminService(settings, storage)
 monitor: SavedSearchMonitor | None = None
@@ -140,12 +141,7 @@ async def channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if post is None or post.chat.username is None:
         return
 
-    configured_channels = {
-        channel.removeprefix("@").strip().casefold()
-        for channel in settings.telegram_job_channels
-    }
-    channel_username = post.chat.username.casefold()
-    if channel_username not in configured_channels:
+    if not storage.is_telegram_channel_enabled(post.chat.username):
         return
 
     text = (post.text or post.caption or "").strip()

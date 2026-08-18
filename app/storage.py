@@ -3,12 +3,15 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+import re
 from threading import Lock
 
 from app.saved_searches import SavedSearch
 
 
 class SQLiteStorage:
+    _TELEGRAM_CHANNEL_RE = re.compile(r"^[A-Za-z0-9_]{1,64}$")
+
     def __init__(self, database_path: str) -> None:
         path = Path(database_path)
         if path.parent != Path('.'):
@@ -74,6 +77,16 @@ class SQLiteStorage:
                 )
                 """
             )
+            self._connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS telegram_channels (
+                    username TEXT PRIMARY KEY,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
 
     def close(self) -> None:
         with self._lock:
@@ -88,7 +101,9 @@ class SQLiteStorage:
             jobs = int(self._connection.execute("SELECT COUNT(*) FROM telegram_jobs").fetchone()[0])
             searches = int(self._connection.execute("SELECT COUNT(*) FROM saved_searches").fetchone()[0])
             deliveries = int(self._connection.execute("SELECT COUNT(*) FROM search_deliveries").fetchone()[0])
-            channels = int(self._connection.execute("SELECT COUNT(DISTINCT lower(channel_username)) FROM telegram_jobs").fetchone()[0])
+            channels = int(self._connection.execute("SELECT COUNT(*) FROM telegram_channels WHERE enabled = 1").fetchone()[0])
+            disabled_channels = int(self._connection.execute("SELECT COUNT(*) FROM telegram_channels WHERE enabled = 0").fetchone()[0])
+            job_channels = int(self._connection.execute("SELECT COUNT(DISTINCT lower(channel_username)) FROM telegram_jobs").fetchone()[0])
             row = self._connection.execute("SELECT published_at FROM telegram_jobs ORDER BY published_at DESC LIMIT 1").fetchone()
         return {
             "users": users,
@@ -96,8 +111,122 @@ class SQLiteStorage:
             "searches": searches,
             "deliveries": deliveries,
             "channels": channels,
+            "disabled_channels": disabled_channels,
+            "job_channels": job_channels,
             "last_job": str(row["published_at"]) if row is not None else None,
         }
+
+    def seed_telegram_channels(self, channels: tuple[str, ...]) -> None:
+        normalized_channels = []
+        for channel in channels:
+            try:
+                normalized_channels.append(self.normalize_telegram_channel(channel))
+            except ValueError:
+                continue
+        with self._lock, self._connection:
+            for username in dict.fromkeys(normalized_channels):
+                self._connection.execute(
+                    "INSERT OR IGNORE INTO telegram_channels (username) VALUES (?)",
+                    (username,),
+                )
+
+    def add_telegram_channel(self, channel: str) -> tuple[str, bool]:
+        username = self.normalize_telegram_channel(channel)
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock, self._connection:
+            existing = self._connection.execute(
+                "SELECT enabled FROM telegram_channels WHERE username = ?",
+                (username,),
+            ).fetchone()
+            if existing is None:
+                self._connection.execute(
+                    "INSERT INTO telegram_channels (username, enabled, created_at, updated_at) VALUES (?, 1, ?, ?)",
+                    (username, now, now),
+                )
+                return username, True
+            self._connection.execute(
+                "UPDATE telegram_channels SET enabled = 1, updated_at = ? WHERE username = ?",
+                (now, username),
+            )
+        return username, False
+
+    def set_telegram_channel_enabled(self, channel: str, enabled: bool) -> bool:
+        username = self.normalize_telegram_channel(channel)
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock, self._connection:
+            cursor = self._connection.execute(
+                "UPDATE telegram_channels SET enabled = ?, updated_at = ? WHERE username = ?",
+                (int(enabled), now, username),
+            )
+        return cursor.rowcount == 1
+
+    def list_telegram_channels(self) -> list[dict[str, object]]:
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT
+                    telegram_channels.username,
+                    telegram_channels.enabled,
+                    telegram_channels.created_at,
+                    telegram_channels.updated_at,
+                    COUNT(telegram_jobs.source_id) AS jobs
+                FROM telegram_channels
+                LEFT JOIN telegram_jobs
+                    ON lower(telegram_jobs.channel_username) = telegram_channels.username
+                GROUP BY
+                    telegram_channels.username,
+                    telegram_channels.enabled,
+                    telegram_channels.created_at,
+                    telegram_channels.updated_at
+                ORDER BY telegram_channels.enabled DESC, telegram_channels.username
+                """
+            ).fetchall()
+        return [
+            {
+                "username": str(row["username"]),
+                "enabled": bool(row["enabled"]),
+                "jobs": int(row["jobs"]),
+                "created_at": str(row["created_at"]),
+                "updated_at": str(row["updated_at"]),
+            }
+            for row in rows
+        ]
+
+    def list_active_telegram_channels(self) -> tuple[str, ...]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT username FROM telegram_channels WHERE enabled = 1 ORDER BY username"
+            ).fetchall()
+        return tuple(str(row["username"]) for row in rows)
+
+    def has_telegram_channels(self) -> bool:
+        with self._lock:
+            row = self._connection.execute("SELECT 1 FROM telegram_channels LIMIT 1").fetchone()
+        return row is not None
+
+    def is_telegram_channel_enabled(self, channel: str) -> bool:
+        try:
+            username = self.normalize_telegram_channel(channel)
+        except ValueError:
+            return False
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT enabled FROM telegram_channels WHERE username = ?",
+                (username,),
+            ).fetchone()
+        return row is not None and bool(row["enabled"])
+
+    @classmethod
+    def normalize_telegram_channel(cls, value: str) -> str:
+        channel = value.strip()
+        for prefix in ("https://t.me/", "http://t.me/", "t.me/"):
+            if channel.casefold().startswith(prefix):
+                channel = channel[len(prefix):]
+                break
+        username = channel.strip().removeprefix("@").strip().strip("/").split("/", 1)[0].strip()
+        if not username or not cls._TELEGRAM_CHANNEL_RE.fullmatch(username):
+            raise ValueError("Telegram channel must be a public username like @channel_name")
+        return username.casefold()
 
     def get_profile(self, user_id: int) -> tuple[tuple[str, ...], str | None, int | None, bool] | None:
         with self._lock:

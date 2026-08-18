@@ -52,14 +52,17 @@ class TelegramJobSource:
         return bool(self._channels)
 
     async def search(self, query: str, *, location: str | None = None, limit: int = 10) -> list[Job]:
-        if not self._channels or limit <= 0:
+        if limit <= 0:
             return []
 
         storage = SQLiteStorage(self._database_path)
         try:
+            channels = storage.list_active_telegram_channels() if storage.has_telegram_channels() else self._channels
+            if not channels:
+                return []
             # Fetch candidates first. Query constraints are applied after the post
             # has been normalized so salary/city/skill filters see structured data.
-            rows = storage.list_telegram_jobs(self._channels, limit=max(limit * 20, 100))
+            rows = storage.list_telegram_jobs(channels, limit=max(limit * 20, 100))
         finally:
             storage.close()
 
@@ -94,10 +97,15 @@ class TelegramJobSource:
         return jobs
 
     async def health(self) -> dict[str, object]:
+        storage = SQLiteStorage(self._database_path)
+        try:
+            channels = storage.list_active_telegram_channels() if storage.has_telegram_channels() else self._channels
+        finally:
+            storage.close()
         return {
             "source": self.name,
-            "available": bool(self._channels),
-            "channels_configured": len(self._channels),
+            "available": bool(channels),
+            "channels_configured": len(channels),
             "mode": "telegram_bot_api_ingestion",
         }
 
