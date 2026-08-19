@@ -33,15 +33,10 @@ class WorkUaJobSource:
     def name(self) -> str:
         return JobSource.WORK_UA.value
 
-    async def search(
-        self,
-        query: str = "python",
-        *,
-        location: str | None = None,
-        limit: int = 10,
-    ) -> list[Job]:
-        normalized_query = "-".join(query.split()).strip("-") or "python"
+    async def search(self, query: str = "python", *, location: str | None = None, limit: int = 10) -> list[Job]:
         location_slug = self._location_slug(location)
+        query_tokens = [token for token in query.split() if not self._is_location_token(token)]
+        normalized_query = "-".join(query_tokens).strip("-") or "python"
         if location_slug:
             url = f"{self._base_url}-{location_slug}-{quote(normalized_query, safe='-')}/"
         else:
@@ -60,13 +55,7 @@ class WorkUaJobSource:
         return self._parse_jobs(response.text, location=location, limit=limit)
 
     @classmethod
-    def _parse_jobs(
-        cls,
-        html: str,
-        *,
-        location: str | None,
-        limit: int,
-    ) -> list[Job]:
+    def _parse_jobs(cls, html: str, *, location: str | None, limit: int) -> list[Job]:
         soup = BeautifulSoup(html, "html.parser")
         jobs: list[Job] = []
         seen: set[str] = set()
@@ -88,23 +77,21 @@ class WorkUaJobSource:
             salary_min, salary_max, currency = cls._extract_salary(context)
             city = cls._extract_location(context) or location
 
-            jobs.append(
-                Job(
-                    title=title,
-                    url=url,
-                    source=JobSource.WORK_UA,
-                    company=cls._extract_company(container, title),
-                    city=city,
-                    salary_min=salary_min,
-                    salary_max=salary_max,
-                    currency=currency,
-                    remote=cls._extract_remote(context),
-                    employment_type=cls._extract_employment_type(context),
-                    description=context[:2000],
-                    published_at=datetime.now(timezone.utc),
-                    source_id=cls._source_id(url),
-                )
-            )
+            jobs.append(Job(
+                title=title,
+                url=url,
+                source=JobSource.WORK_UA,
+                company=cls._extract_company(container, title),
+                city=city,
+                salary_min=salary_min,
+                salary_max=salary_max,
+                currency=currency,
+                remote=cls._extract_remote(context),
+                employment_type=cls._extract_employment_type(context),
+                description=context[:2000],
+                published_at=datetime.now(timezone.utc),
+                source_id=cls._source_id(url),
+            ))
             seen.add(url)
             if len(jobs) >= limit:
                 break
@@ -117,7 +104,7 @@ class WorkUaJobSource:
 
     @classmethod
     def _absolute_url(cls, href: str) -> str:
-        if href.startswith("http://") or href.startswith("https://"):
+        if href.startswith(("http://", "https://")):
             return href
         return f"{cls._origin}{href if href.startswith('/') else '/' + href}"
 
@@ -126,12 +113,12 @@ class WorkUaJobSource:
         match = re.search(r"/jobs/(\d+)", url)
         return match.group(1) if match else None
 
-    @staticmethod
-    def _extract_company(container: object, title: str) -> str | None:
+    @classmethod
+    def _extract_company(cls, container: object, title: str) -> str | None:
         if not hasattr(container, "select"):
             return None
         candidates = []
-        for selector in ("a[href*='/company/']", "a[href*='/resumes/']"):
+        for selector in ("a[href*='/company/']", "a[href*='company']"):
             candidates.extend(container.select(selector))
         for candidate in candidates:
             text = candidate.get_text(" ", strip=True)
@@ -144,6 +131,10 @@ class WorkUaJobSource:
         if not location:
             return None
         return cls._location_slugs.get(" ".join(location.split()).casefold())
+
+    @classmethod
+    def _is_location_token(cls, token: str) -> bool:
+        return token.casefold() in cls._location_slugs
 
     @staticmethod
     def _extract_location(text: str) -> str | None:
@@ -159,19 +150,11 @@ class WorkUaJobSource:
     def _extract_salary(text: str) -> tuple[Decimal | None, Decimal | None, str | None]:
         normalized = " ".join(text.split())
         number = r"(?:\d{1,3}(?:[\s\u00a0]\d{3})+|\d+)"
-        range_match = re.search(
-            rf"({number})\s*[–—-]\s*({number})\s*(грн|uah|\$|€|eur|₴)",
-            normalized,
-            flags=re.IGNORECASE,
-        )
+        range_match = re.search(rf"({number})\s*[–—-]\s*({number})\s*(грн|uah|\$|€|eur|₴)", normalized, flags=re.IGNORECASE)
         if range_match:
             first, second, currency = range_match.groups()
         else:
-            single_match = re.search(
-                rf"({number})\s*(грн|uah|\$|€|eur|₴)",
-                normalized,
-                flags=re.IGNORECASE,
-            )
+            single_match = re.search(rf"({number})\s*(грн|uah|\$|€|eur|₴)", normalized, flags=re.IGNORECASE)
             if not single_match:
                 return None, None, None
             first, currency = single_match.groups()
@@ -179,11 +162,7 @@ class WorkUaJobSource:
 
         minimum = WorkUaJobSource._decimal(first)
         maximum = WorkUaJobSource._decimal(second) if second else minimum
-        normalized_currency = (
-            "$" if currency == "$" else
-            "EUR" if currency.casefold() in {"€", "eur"} else
-            "UAH"
-        )
+        normalized_currency = "$" if currency == "$" else "EUR" if currency.casefold() in {"€", "eur"} else "UAH"
         return minimum, maximum, normalized_currency
 
     @staticmethod
