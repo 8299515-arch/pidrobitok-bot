@@ -9,6 +9,7 @@ from app.memory import ConversationMemory
 from app.profile import CandidateProfileStore
 from app.query_parser import JobQuery, JobQueryParser
 from app.storage import SQLiteStorage
+from app.tools.job_aggregator import JobAggregator
 from app.tools.job_pipeline import JobPipeline
 from app.tools.job_ranker import JobRanker, RankedJob
 from app.tools.jobs import JobSearchTool
@@ -39,129 +40,67 @@ class CareerAgent:
             JobSearchTool(),
             WorkUaJobSource(),
             OlxJobSource(),
-            TelegramJobSource(
-                settings.telegram_job_channels,
-                settings.database_path,
-            ),
+            TelegramJobSource(settings.telegram_job_channels, settings.database_path),
         )
-        self._job_pipeline = JobPipeline(JobRanker())
+        self._job_pipeline = JobPipeline(JobAggregator(), JobRanker())
         self._query_parser = JobQueryParser()
 
     async def respond(self, user_id: int, text: str) -> str:
         self._memory.add(user_id, "user", text)
         self._profiles.update_from_text(user_id, text)
-
-        if self._looks_like_job_search(text.casefold()):
-            answer = await self._search_jobs(user_id, text)
-        else:
-            answer = await self._ask_model(user_id)
-
+        answer = await self._search_jobs(user_id, text) if self._looks_like_job_search(text.casefold()) else await self._ask_model(user_id)
         self._memory.add(user_id, "assistant", answer)
         return answer
 
-    async def search_ranked_jobs(
-        self,
-        user_id: int,
-        text: str,
-    ) -> list[RankedJob]:
+    async def search_ranked_jobs(self, user_id: int, text: str) -> list[RankedJob]:
         profile = self._profiles.get(user_id)
         parsed = self._query_parser.parse(text)
         query = self._build_job_query(parsed, profile)
         location = parsed.city or profile.city
-
-        source_results = await asyncio.gather(
-            *(
-                self._safe_source_search(
-                    source,
-                    query=query,
-                    location=location,
-                    limit=self._source_limit,
-                )
-                for source in self._job_sources
-            )
-        )
-
-        return self._job_pipeline.run(
-            source_results,
-            profile,
-            query=parsed,
-            limit=self._source_limit,
-        )
+        source_results = await asyncio.gather(*(
+            self._safe_source_search(source, query=query, location=location, limit=self._source_limit)
+            for source in self._job_sources
+        ))
+        return self._job_pipeline.run(source_results, profile, query=parsed, limit=self._source_limit)
 
     async def _search_jobs(self, user_id: int, text: str) -> str:
         ranked_jobs = await self.search_ranked_jobs(user_id, text)
-
         if not ranked_jobs:
             return "По доступным источникам подходящих вакансий не найдено."
-
         profile = self._profiles.get(user_id)
         parsed = self._query_parser.parse(text)
         query = self._build_job_query(parsed, profile)
-
-        lines = [
-            f"🔎 Лучшие вакансии: {query}",
-            "",
-        ]
-
+        lines = [f"🔎 Лучшие вакансии: {query}", ""]
         for index, ranked in enumerate(ranked_jobs, start=1):
             lines.append(self.format_ranked_job(ranked, index=index))
             lines.append("")
-
         return "\n".join(lines).strip()
 
     @staticmethod
-    def format_ranked_job(
-        ranked: RankedJob,
-        index: int | None = None,
-    ) -> str:
+    def format_ranked_job(ranked: RankedJob, index: int | None = None) -> str:
         job = ranked.job
         prefix = f"{index}. " if index is not None else ""
-
-        lines = [f"{prefix}{job.title}"]
-        lines.append(f"   🎯 Запрос: {ranked.query_score}%")
-
+        lines = [f"{prefix}{job.title}", f"   🎯 Запрос: {ranked.query_score}%"]
         if ranked.candidate_score is not None:
             lines.append(f"   👤 Вам подходит: {ranked.candidate_score}%")
-
         lines.append(f"   Источник: {job.source.value}")
-
         if job.company:
             lines.append(f"   🏢 {job.company}")
-
         if job.city:
             lines.append(f"   📍 {job.city}")
-
         if job.salary_min is not None:
-            lines.append(
-                "   💰 "
-                f"{CareerAgent._format_salary(job.salary_min, job.salary_max, job.currency)}"
-            )
-
+            lines.append(f"   💰 {CareerAgent._format_salary(job.salary_min, job.salary_max, job.currency)}")
         if job.remote is True:
             lines.append("   🏠 Удалённая работа")
-
         if ranked.reasons:
             lines.append(f"   ✓ {'; '.join(ranked.reasons)}")
-
         lines.append(f"   🔗 {job.url}")
         return "\n".join(lines)
 
     @staticmethod
-    async def _safe_source_search(
-        source: object,
-        *,
-        query: str,
-        location: str | None,
-        limit: int,
-    ) -> list:
+    async def _safe_source_search(source: object, *, query: str, location: str | None, limit: int) -> list:
         try:
-            return list(
-                await getattr(source, "search")(
-                    query,
-                    location=location,
-                    limit=limit,
-                )
-            )
+            return list(await getattr(source, "search")(query, location=location, limit=limit))
         except (httpx.HTTPError, TimeoutError):
             return []
         except Exception:
@@ -169,30 +108,18 @@ class CareerAgent:
 
     async def _ask_model(self, user_id: int) -> str:
         if self._google_api_key is None:
-            return (
-                "AI-режим временно отключён: GOOGLE_API_KEY не настроен. "
-                "Поиск вакансий продолжает работать без AI."
-            )
-
+            return "AI-режим временно отключён: GOOGLE_API_KEY не настроен. Поиск вакансий продолжает работать без AI."
         if self._client is None:
             self._client = genai.Client(api_key=self._google_api_key)
-
         contents = [
-            types.Content(
-                role="model" if message.role == "assistant" else "user",
-                parts=[types.Part(text=message.content)],
-            )
+            types.Content(role="model" if message.role == "assistant" else "user", parts=[types.Part(text=message.content)])
             for message in self._memory.history(user_id)
         ]
-
         response = await self._client.aio.models.generate_content(
             model=self._model,
             contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=self._system_instruction,
-            ),
+            config=types.GenerateContentConfig(system_instruction=self._system_instruction),
         )
-
         text = (response.text or "").strip()
         return text or "Не удалось сформировать ответ. Попробуй сформулировать запрос иначе."
 
@@ -221,11 +148,9 @@ class CareerAgent:
     @staticmethod
     def _looks_like_job_search(text: str) -> bool:
         explicit_search_phrases = (
-            "найди работу", "найти работу", "ищу работу", "поищи работу",
-            "поиск работы", "ищу вакансию", "найди вакансию", "найти вакансию",
-            "поищи вакансию",
+            "найди работу", "найти работу", "ищу работу", "поищи работу", "поиск работы",
+            "ищу вакансию", "найди вакансию", "найти вакансию", "поищи вакансию",
         )
-        job_search_keywords = ("ваканси", "job")
         if any(phrase in text for phrase in explicit_search_phrases):
             return True
-        return any(keyword in text for keyword in job_search_keywords)
+        return any(keyword in text for keyword in ("ваканси", "job"))
