@@ -11,7 +11,7 @@ load_dotenv()
 @dataclass(frozen=True)
 class Settings:
     bot_token: str
-    google_api_key: str
+    google_api_key: str | None
     ai_model: str = "gemini-3.6-flash"
     max_history_messages: int = 12
     telegram_job_channels: tuple[str, ...] = ("@PodrabotkaKiev_1",)
@@ -23,12 +23,10 @@ class Settings:
     @classmethod
     def from_environment(cls) -> "Settings":
         bot_token = os.getenv("BOT_TOKEN", "").strip()
-        google_api_key = os.getenv("GOOGLE_API_KEY", "").strip()
+        google_api_key = os.getenv("GOOGLE_API_KEY", "").strip() or None
 
         if not bot_token:
             raise RuntimeError("BOT_TOKEN is not configured")
-        if not google_api_key:
-            raise RuntimeError("GOOGLE_API_KEY is not configured")
 
         raw_channels = os.getenv("TELEGRAM_JOB_CHANNELS")
         channels = tuple(
