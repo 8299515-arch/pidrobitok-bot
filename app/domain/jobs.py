@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 class JobSource(StrEnum):
     ROBOTA_UA = "robota.ua"
+    WORK_UA = "work.ua"
     TELEGRAM = "telegram"
     OLX = "olx"
 
