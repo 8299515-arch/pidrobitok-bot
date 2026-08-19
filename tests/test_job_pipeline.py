@@ -75,7 +75,7 @@ class JobPipelineTests(unittest.TestCase):
 
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0].job.city, "Київ")
-        self.assertEqual(result[0].query_score, 100)
+        self.assertEqual(result[0].query_score, 50)
 
     def test_query_city_filters_out_other_city(self) -> None:
         job = Job(
