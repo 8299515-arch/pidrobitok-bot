@@ -196,7 +196,7 @@ class JobSearchTool:
                 if result:
                     return result
         elif isinstance(value, dict):
-            for key in ("address", "city", "name"):
+            for key in ("addressLocality", "address", "city", "name"):
                 result = cls._location_from_value(value.get(key))
                 if result:
                     return result
@@ -210,7 +210,19 @@ class JobSearchTool:
             return value
         if not isinstance(value, dict):
             return None
-        return " ".join(str(value[key]) for key in ("minValue", "value", "maxValue", "currency") if value.get(key) is not None)
+        minimum = value.get("minValue")
+        maximum = value.get("maxValue")
+        exact = value.get("value")
+        currency = value.get("currency")
+        if minimum is not None and maximum is not None:
+            return f"{minimum}-{maximum} {currency}" if currency is not None else f"{minimum}-{maximum}"
+        if exact is not None:
+            return f"{exact} {currency}" if currency is not None else str(exact)
+        if minimum is not None:
+            return f"{minimum} {currency}" if currency is not None else str(minimum)
+        if maximum is not None:
+            return f"{maximum} {currency}" if currency is not None else str(maximum)
+        return None
 
     @staticmethod
     def _strip_html(value: str | None) -> str | None:
