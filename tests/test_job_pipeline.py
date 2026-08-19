@@ -3,6 +3,7 @@ import unittest
 
 from app.domain.jobs import Job, JobSource
 from app.profile import CandidateProfile
+from app.query_parser import JobQuery
 from app.tools.job_aggregator import JobAggregator
 from app.tools.job_pipeline import JobPipeline
 from app.tools.job_ranker import JobRanker
@@ -59,6 +60,36 @@ class JobPipelineTests(unittest.TestCase):
 
         self.assertEqual(result[0].score, 95)
         self.assertTrue(result[0].reasons)
+
+    def test_query_city_aliases_are_treated_as_the_same_city(self) -> None:
+        job = Job(
+            title="Python Developer",
+            url="https://example.com/job/4",
+            source=JobSource.ROBOTA_UA,
+            city="Київ",
+            description="Python backend developer",
+        )
+        query = JobQuery(text="найди python в Киеве", skills=("python",), city="Киев")
+
+        result = self.pipeline.run([[job]], CandidateProfile(), query=query)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].job.city, "Київ")
+        self.assertEqual(result[0].query_score, 100)
+
+    def test_query_city_filters_out_other_city(self) -> None:
+        job = Job(
+            title="Python Developer",
+            url="https://example.com/job/5",
+            source=JobSource.ROBOTA_UA,
+            city="Львов",
+            description="Python backend developer",
+        )
+        query = JobQuery(text="найди python в Киеве", skills=("python",), city="Киев")
+
+        result = self.pipeline.run([[job]], CandidateProfile(), query=query)
+
+        self.assertEqual(result, [])
 
 
 if __name__ == "__main__":
