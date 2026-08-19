@@ -76,7 +76,6 @@ class JobSearchTool:
                 if len(jobs) >= limit:
                     return jobs
 
-        # Conservative fallback for HTML links. Only actual vacancy URLs are accepted.
         for anchor in soup.select("a[href]"):
             href = anchor.get("href")
             title = anchor.get_text(" ", strip=True)
@@ -250,10 +249,26 @@ class JobSearchTool:
 
     @staticmethod
     def _extract_salary(text: str) -> tuple[Decimal | None, Decimal | None, str | None]:
-        matches = re.findall(r"(\d[\d\s]{2,})(?:\s*[–—-]\s*(\d[\d\s]{2,}))?\s*(грн|uah|\$|€|eur|₴)", " ".join(text.split()), re.IGNORECASE)
-        if not matches:
-            return None, None, None
-        first, second, currency = matches[0]
+        normalized = " ".join(text.split())
+        number = r"(?:\d{1,3}(?:[\s\u00a0]\d{3})+|\d+)"
+        range_match = re.search(
+            rf"({number})\s*[–—-]\s*({number})\s*(грн|uah|\$|€|eur|₴)",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        if range_match:
+            first, second, currency = range_match.groups()
+        else:
+            single_match = re.search(
+                rf"({number})\s*(грн|uah|\$|€|eur|₴)",
+                normalized,
+                flags=re.IGNORECASE,
+            )
+            if not single_match:
+                return None, None, None
+            first, currency = single_match.groups()
+            second = None
+
         minimum = JobSearchTool._decimal(first)
         maximum = JobSearchTool._decimal(second) if second else minimum
         normalized_currency = "$" if currency == "$" else "EUR" if currency.casefold() in {"€", "eur"} else "UAH"
@@ -262,7 +277,7 @@ class JobSearchTool:
     @staticmethod
     def _decimal(value: str) -> Decimal | None:
         try:
-            return Decimal(value.replace(" ", ""))
+            return Decimal(value.replace(" ", "").replace("\u00a0", ""))
         except InvalidOperation:
             return None
 
