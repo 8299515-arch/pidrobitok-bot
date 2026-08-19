@@ -28,7 +28,8 @@ class CareerAgent:
     )
 
     def __init__(self, settings: Settings) -> None:
-        self._client = genai.Client(api_key=settings.google_api_key)
+        self._google_api_key = settings.google_api_key
+        self._client: genai.Client | None = None
         self._model = settings.ai_model
         self._memory = ConversationMemory(settings.max_history_messages)
         storage = SQLiteStorage(settings.database_path)
@@ -107,6 +108,12 @@ class CareerAgent:
             return []
 
     async def _ask_model(self, user_id: int) -> str:
+        if self._google_api_key is None:
+            return "AI-режим временно отключён: GOOGLE_API_KEY не настроен. Поиск вакансий продолжает работать без AI."
+
+        if self._client is None:
+            self._client = genai.Client(api_key=self._google_api_key)
+
         contents = [
             types.Content(role="model" if message.role == "assistant" else "user", parts=[types.Part(text=message.content)])
             for message in self._memory.history(user_id)
