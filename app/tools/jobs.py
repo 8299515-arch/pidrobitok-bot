@@ -22,31 +22,15 @@ class JobSearchTool:
         "Chrome/151.0.0.0 Safari/537.36"
     )
     _location_slugs = {
-        "київ": "kyiv",
-        "киев": "kyiv",
-        "kyiv": "kyiv",
-        "kiev": "kyiv",
-        "львів": "lviv",
-        "львов": "lviv",
-        "lviv": "lviv",
-        "одеса": "odesa",
-        "одесса": "odesa",
-        "odesa": "odesa",
-        "дніпро": "dnipro",
-        "днепр": "dnipro",
-        "dnipro": "dnipro",
-        "харків": "kharkiv",
-        "харьков": "kharkiv",
-        "kharkiv": "kharkiv",
-        "запоріжжя": "zaporizhzhia",
-        "запорожье": "zaporizhzhia",
-        "zaporizhzhia": "zaporizhzhia",
-        "вінниця": "vinnytsia",
-        "винница": "vinnytsia",
-        "vinnytsia": "vinnytsia",
-        "україна": "ukraine",
-        "украина": "ukraine",
-        "ukraine": "ukraine",
+        "київ": "kyiv", "киев": "kyiv", "kyiv": "kyiv", "kiev": "kyiv",
+        "львів": "lviv", "львов": "lviv", "lviv": "lviv",
+        "одеса": "odesa", "одесса": "odesa", "odesa": "odesa",
+        "дніпро": "dnipro", "днепр": "dnipro", "dnipro": "dnipro",
+        "харків": "kharkiv", "харьков": "kharkiv", "kharkiv": "kharkiv",
+        "запоріжжя": "zaporizhzhia", "запорожье": "zaporizhzhia",
+        "zaporizhzhia": "zaporizhzhia", "вінниця": "vinnytsia",
+        "винница": "vinnytsia", "vinnytsia": "vinnytsia",
+        "україна": "ukraine", "украина": "ukraine", "ukraine": "ukraine",
     }
 
     @property
@@ -103,20 +87,23 @@ class JobSearchTool:
                 continue
 
             context = anchor.parent.get_text(" ", strip=True) if anchor.parent else title
-            job = Job(
-                title=title,
-                url=url,
-                source=JobSource.ROBOTA_UA,
-                city=self._extract_location(context),
-                salary_min=self._extract_salary(context)[0],
-                salary_max=self._extract_salary(context)[1],
-                currency=self._extract_salary(context)[2],
-                remote=self._extract_remote(context),
-                employment_type=self._extract_employment_type(context),
-                published_at=datetime.now(timezone.utc),
+            salary_min, salary_max, currency = self._extract_salary(context)
+            jobs.append(
+                Job(
+                    title=title,
+                    url=url,
+                    source=JobSource.ROBOTA_UA,
+                    city=self._extract_location(context) or location,
+                    salary_min=salary_min,
+                    salary_max=salary_max,
+                    currency=currency,
+                    remote=self._extract_remote(context),
+                    employment_type=self._extract_employment_type(context),
+                    description=context[:2000],
+                    published_at=datetime.now(timezone.utc),
+                )
             )
             seen_urls.add(url)
-            jobs.append(job)
             if len(jobs) >= limit:
                 break
 
