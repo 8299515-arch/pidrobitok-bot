@@ -9,12 +9,12 @@ from app.memory import ConversationMemory
 from app.profile import CandidateProfileStore
 from app.query_parser import JobQuery, JobQueryParser
 from app.storage import SQLiteStorage
-from app.tools.job_aggregator import JobAggregator
 from app.tools.job_pipeline import JobPipeline
 from app.tools.job_ranker import JobRanker, RankedJob
 from app.tools.jobs import JobSearchTool
 from app.tools.olx import OlxJobSource
 from app.tools.telegram_jobs import TelegramJobSource
+from app.tools.workua_jobs import WorkUaJobSource
 
 
 class CareerAgent:
@@ -37,13 +37,14 @@ class CareerAgent:
         self._source_limit = settings.job_source_limit
         self._job_sources = (
             JobSearchTool(),
+            WorkUaJobSource(),
             OlxJobSource(),
             TelegramJobSource(
                 settings.telegram_job_channels,
                 settings.database_path,
             ),
         )
-        self._job_pipeline = JobPipeline(JobAggregator(), JobRanker())
+        self._job_pipeline = JobPipeline(JobRanker())
         self._query_parser = JobQueryParser()
 
     async def respond(self, user_id: int, text: str) -> str:
@@ -120,9 +121,7 @@ class CareerAgent:
         lines.append(f"   🎯 Запрос: {ranked.query_score}%")
 
         if ranked.candidate_score is not None:
-            lines.append(
-                f"   👤 Вам подходит: {ranked.candidate_score}%"
-            )
+            lines.append(f"   👤 Вам подходит: {ranked.candidate_score}%")
 
         lines.append(f"   Источник: {job.source.value}")
 
@@ -142,12 +141,9 @@ class CareerAgent:
             lines.append("   🏠 Удалённая работа")
 
         if ranked.reasons:
-            lines.append(
-                f"   ✓ {'; '.join(ranked.reasons)}"
-            )
+            lines.append(f"   ✓ {'; '.join(ranked.reasons)}")
 
         lines.append(f"   🔗 {job.url}")
-
         return "\n".join(lines)
 
     @staticmethod
@@ -198,83 +194,38 @@ class CareerAgent:
         )
 
         text = (response.text or "").strip()
-
-        return text or (
-            "Не удалось сформировать ответ. "
-            "Попробуй сформулировать запрос иначе."
-        )
+        return text or "Не удалось сформировать ответ. Попробуй сформулировать запрос иначе."
 
     @staticmethod
-    def _build_job_query(
-        parsed: JobQuery,
-        profile: object,
-    ) -> str:
-        """Build a source query from explicit user constraints."""
+    def _build_job_query(parsed: JobQuery, profile: object) -> str:
         parts = list(parsed.skills)
-
         if parsed.city:
             parts.append(parsed.city)
-
         if parsed.remote is True:
             parts.append("remote")
-
         if parsed.salary_min is not None:
             parts.append(f"от {parsed.salary_min}")
-
         if parsed.salary_max is not None:
             parts.append(f"до {parsed.salary_max}")
-
         if parsed.employment:
             parts.append(parsed.employment)
-
-        return (
-            " ".join(
-                dict.fromkeys(
-                    part for part in parts if part
-                )
-            )
-            or "вакансии"
-        )
+        return " ".join(dict.fromkeys(part for part in parts if part)) or "вакансии"
 
     @staticmethod
-    def _format_salary(
-        minimum: object,
-        maximum: object | None,
-        currency: str | None,
-    ) -> str:
+    def _format_salary(minimum: object, maximum: object | None, currency: str | None) -> str:
         label = currency or ""
-
         if maximum is None or minimum == maximum:
             return f"{minimum} {label}".strip()
-
         return f"{minimum}–{maximum} {label}".strip()
 
     @staticmethod
     def _looks_like_job_search(text: str) -> bool:
         explicit_search_phrases = (
-            "найди работу",
-            "найти работу",
-            "ищу работу",
-            "поищи работу",
-            "поиск работы",
-            "ищу вакансию",
-            "найди вакансию",
-            "найти вакансию",
+            "найди работу", "найти работу", "ищу работу", "поищи работу",
+            "поиск работы", "ищу вакансию", "найди вакансию", "найти вакансию",
             "поищи вакансию",
         )
-
-        job_search_keywords = (
-            "ваканси",
-            "job",
-        )
-
-        if any(
-            phrase in text
-            for phrase in explicit_search_phrases
-        ):
+        job_search_keywords = ("ваканси", "job")
+        if any(phrase in text for phrase in explicit_search_phrases):
             return True
-
-        return any(
-            keyword in text
-            for keyword in job_search_keywords
-        )
+        return any(keyword in text for keyword in job_search_keywords)
