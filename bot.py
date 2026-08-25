@@ -1,129 +1,227 @@
-import os
-from dotenv import load_dotenv
+import logging
+from datetime import datetime, timezone
 
-from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram import ReplyKeyboardMarkup, Update
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
-import httpx
-from bs4 import BeautifulSoup
+from app.admin import AdminService
+from app.agent import CareerAgent
+from app.config import Settings
+from app.monitor import SavedSearchMonitor
+from app.saved_searches import SavedSearchStore
+from app.storage import SQLiteStorage
 
-from google import genai
+logging.basicConfig(
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
 
-# ======================
-# ENV
-# ======================
-load_dotenv()
+settings = Settings.from_environment()
+storage = SQLiteStorage(settings.database_path)
+storage.seed_telegram_channels(settings.telegram_job_channels)
+agent = CareerAgent(settings)
+saved_searches = SavedSearchStore(storage)
+admin_service = AdminService(settings, storage)
+monitor: SavedSearchMonitor | None = None
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-
-if not BOT_TOKEN:
-    raise Exception("❌ BOT_TOKEN не найден в .env")
-
-# ======================
-# AI (НОВЫЙ СТАБИЛЬНЫЙ SDK)
-# ======================
-client = genai.Client(api_key=GOOGLE_API_KEY)
-
-def ask_ai(text: str):
-    try:
-        res = client.models.generate_content(
-            model="gemini-1.5-flash",
-            contents=text
-        )
-        return res.text
-    except Exception as e:
-        return f"AI ошибка: {e}"
-
-# ======================
-# КНОПКИ
-# ======================
 keyboard = ReplyKeyboardMarkup(
     [
         ["📍 Киев вакансии", "💼 Вакансии"],
-        ["🤖 AI HR"]
+        ["🤖 AI HR"],
     ],
-    resize_keyboard=True
+    resize_keyboard=True,
 )
 
-# ======================
-# ВАКАНСИИ (простая версия)
-# ======================
-def get_jobs():
-    try:
-        url = "https://robota.ua/zapros/python-kyiv"
-        r = httpx.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
-        soup = BeautifulSoup(r.text, "html.parser")
 
-        jobs = []
-        for h in soup.find_all("h2"):
-            if h.text.strip():
-                jobs.append(h.text.strip())
+def _split_message(text: str, limit: int = 3900) -> list[str]:
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    current = ""
+    for block in text.split("\n\n"):
+        candidate = f"{current}\n\n{block}".strip() if current else block
+        if len(candidate) <= limit:
+            current = candidate
+            continue
+        if current:
+            chunks.append(current)
+        while len(block) > limit:
+            chunks.append(block[:limit])
+            block = block[limit:]
+        current = block
+    if current:
+        chunks.append(current)
+    return chunks
 
-        return jobs[:7]
 
-    except:
-        return ["❌ Не удалось загрузить вакансии"]
+async def _reply(update: Update, text: str) -> None:
+    if update.message is None:
+        return
+    for chunk in _split_message(text):
+        await update.message.reply_text(chunk, disable_web_page_preview=True)
 
-# ======================
-# START
-# ======================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.message is None:
+        return
+
     await update.message.reply_text(
-        "🚀 V4 FIXED BOT\n\nВыбери действие:",
-        reply_markup=keyboard
+        "🚀 Pidrobitok AI Agent\n\n"
+        "Я могу искать вакансии, анализировать их и помогать с карьерой. "
+        "Напиши запрос обычным языком.\n\n"
+        "Пример:\n"
+        "Python/FastAPI, Киев или удалённо, от 60000 грн, full-time\n\n"
+        "Для автоматического мониторинга: /watch запрос | интервал_минут\n"
+        "Например: /watch Python Киев от 60000 | 60\n"
+        "/watches — мои мониторинги\n"
+        "/unwatch ID — удалить мониторинг",
+        reply_markup=keyboard,
     )
 
-# ======================
-# JOBS
-# ======================
-async def jobs(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = get_jobs()
 
-    text = "📍 Вакансии Киев:\n\n"
-    for j in data:
-        text += f"• {j}\n"
+async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await admin_service.handle(update, context)
 
-    await update.message.reply_text(text)
 
-# ======================
-# AI
-# ======================
-async def ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    answer = ask_ai(update.message.text)
-    await update.message.reply_text(answer)
+async def watch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.message is None or update.effective_user is None:
+        return
+    raw = " ".join(context.args).strip()
+    if "|" not in raw:
+        await update.message.reply_text("Формат: /watch Python Киев от 60000 | 60")
+        return
+    query, interval_text = (part.strip() for part in raw.split("|", 1))
+    if not query:
+        await update.message.reply_text("Запрос для мониторинга не может быть пустым.")
+        return
+    try:
+        interval = int(interval_text)
+        saved = saved_searches.create(update.effective_user.id, query, interval)
+    except ValueError as exc:
+        await update.message.reply_text(f"Не удалось создать мониторинг: {exc}")
+        return
+    await update.message.reply_text(
+        f"✅ Мониторинг #{saved.search_id} создан.\n"
+        f"Запрос: {saved.query}\n"
+        f"Интервал: каждые {saved.interval_minutes} мин."
+    )
 
-# ======================
-# ROUTER
-# ======================
-async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
 
-    if text == "📍 Киев вакансии":
-        await jobs(update, context)
+async def watches(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.message is None or update.effective_user is None:
+        return
+    items = saved_searches.list_for_user(update.effective_user.id)
+    if not items:
+        await update.message.reply_text("У тебя пока нет активных мониторингов.")
+        return
+    lines = ["🔔 Твои мониторинги:"]
+    for item in items:
+        status = "активен" if item.enabled else "выключен"
+        lines.append(f"#{item.search_id} — {item.query} — каждые {item.interval_minutes} мин. — {status}")
+    await _reply(update, "\n".join(lines))
+
+
+async def unwatch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.message is None or update.effective_user is None or not context.args:
+        if update.message is not None:
+            await update.message.reply_text("Формат: /unwatch ID")
+        return
+    try:
+        search_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("ID должен быть числом.")
+        return
+    deleted = saved_searches.delete(update.effective_user.id, search_id)
+    await update.message.reply_text("🗑 Мониторинг удалён." if deleted else "Мониторинг не найден.")
+
+
+async def channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    post = update.channel_post
+    if post is None or post.chat.username is None:
         return
 
-    if text == "💼 Вакансии":
-        await jobs(update, context)
+    if not storage.is_telegram_channel_enabled(post.chat.username):
         return
+
+    text = (post.text or post.caption or "").strip()
+    if not text:
+        return
+
+    url = f"https://t.me/{post.chat.username}/{post.message_id}"
+    title = next((line.strip() for line in text.splitlines() if line.strip()), text)[:180]
+    published_at = post.date if post.date.tzinfo is not None else post.date.replace(tzinfo=timezone.utc)
+    storage.save_telegram_post(
+        channel_username=post.chat.username,
+        message_id=post.message_id,
+        title=title,
+        description=text,
+        url=url,
+        published_at=published_at,
+    )
+    logger.info("Stored Telegram job post %s/%s", post.chat.username, post.message_id)
+
+
+async def router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.message is None or update.effective_user is None:
+        return
+
+    text = update.message.text or ""
+    user_id = update.effective_user.id
 
     if text == "🤖 AI HR":
-        await update.message.reply_text("Напиши о себе (опыт, навыки)")
+        await update.message.reply_text(
+            "Расскажи о своём опыте, навыках, городе и желаемой зарплате. "
+            "Я использую это как основу для карьерного профиля."
+        )
         return
 
-    await ai(update, context)
+    if text in {"📍 Киев вакансии", "💼 Вакансии"}:
+        text = "Найди актуальные вакансии Python в Киеве"
 
-# ======================
-# MAIN
-# ======================
-def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+    try:
+        await update.message.chat.send_action("typing")
+        answer = await agent.respond(user_id, text)
+    except Exception:
+        logger.exception("Agent request failed for user %s", user_id)
+        answer = "Произошла внутренняя ошибка. Попробуй ещё раз через минуту."
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, router))
+    await _reply(update, answer)
 
-    print("🚀 V4 FIXED RUNNING...")
-    app.run_polling()
+
+async def post_init(application: Application) -> None:
+    global monitor
+    monitor = SavedSearchMonitor(application.bot, agent, saved_searches, settings.monitor_poll_seconds)
+    monitor.start()
+    logger.info("Saved-search monitor started")
+
+
+async def post_shutdown(application: Application) -> None:
+    if monitor is not None:
+        await monitor.stop()
+    storage.close()
+    logger.info("Saved-search monitor stopped and SQLite storage closed")
+
+
+def main() -> None:
+    application = (
+        Application.builder()
+        .token(settings.bot_token)
+        .post_init(post_init)
+        .post_shutdown(post_shutdown)
+        .build()
+    )
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("admin", admin))
+    application.add_handler(CommandHandler("watch", watch))
+    application.add_handler(CommandHandler("watches", watches))
+    application.add_handler(CommandHandler("unwatch", unwatch))
+    application.add_handler(MessageHandler(filters.ChatType.CHANNEL, channel_post))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, router))
+
+    logger.info("Pidrobitok AI Agent is starting")
+    application.run_polling()
+
 
 if __name__ == "__main__":
     main()
